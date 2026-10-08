@@ -843,21 +843,21 @@ export default function NewTrade() {
             </div>}
 
             <div className="space-y-2 lg:col-span-3">
-              <Label>Direction</Label>
+              <Label>جهت معامله</Label>
               <div className="flex gap-2">
                 <Button 
                   variant={trade.direction === 'long' ? 'default' : 'outline'}
                   onClick={() => handleChange('direction', 'long')}
                   className={`flex-1 ${trade.direction === 'long' ? 'bg-emerald-500/20 text-emerald-500 border-emerald-500/50 hover:bg-emerald-500/30' : ''}`}
                 >
-                  LONG
+                  BUY
                 </Button>
                 <Button 
                   variant={trade.direction === 'short' ? 'default' : 'outline'}
                   onClick={() => handleChange('direction', 'short')}
                   className={`flex-1 ${trade.direction === 'short' ? 'bg-rose-500/20 text-rose-500 border-rose-500/50 hover:bg-rose-500/30' : ''}`}
                 >
-                  SHORT
+                  SELL
                 </Button>
               </div>
             </div>
@@ -950,44 +950,6 @@ export default function NewTrade() {
           </div>
         </section>
 
-        {/* ── سشن + ستاپ (بخشی از Section 1) ── */}
-        {!isQuickMode && (
-          <section className="space-y-6">
-            <h2 className="text-lg font-semibold border-b pb-2">۱ب. سشن معاملاتی و ستاپ</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="space-y-2">
-                <Label>سشن معاملاتی</Label>
-                <Select value={(trade as any).tradingSession || ''} onValueChange={v => handleChange('tradingSession' as any, v || null)}>
-                 <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="انتخاب کنید…" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="london">لندن</SelectItem>
-                    <SelectItem value="new-york">نیویورک</SelectItem>
-                    <SelectItem value="asia">آسیا</SelectItem>
-                    <SelectItem value="overlap">اوورلپ</SelectItem>
-                    <SelectItem value="other">سایر</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>نوع ستاپ</Label>
-                <Select value={(trade as any).setupType || ''} onValueChange={v => handleChange('setupType' as any, v || null)}>
-                 <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="انتخاب کنید…" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="break-and-retest">Break and Retest</SelectItem>
-                    <SelectItem value="fvg">FVG (Fair Value Gap)</SelectItem>
-                    <SelectItem value="liquidity-grab">Liquidity Grab</SelectItem>
-                    <SelectItem value="order-block">Order Block</SelectItem>
-                    <SelectItem value="trend-continuation">Trend Continuation</SelectItem>
-                    <SelectItem value="reversal">Reversal</SelectItem>
-                    <SelectItem value="support-resistance">حمایت/مقاومت</SelectItem>
-                    <SelectItem value="other">سایر</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-          </section>
-        )}
-
         {/* SECTION 2: Entry Details */}
         <section className="space-y-6">
           <h2 className="text-lg font-semibold border-b pb-2">2. Entry Details</h2>
@@ -1012,30 +974,6 @@ export default function NewTrade() {
               <Label>Take Profit</Label>
               <NumericInput value={trade.takeProfit} onValueChange={value => handleChange('takeProfit', value)} />
             </div>
-          </div>
-        </section>
-
-        {/* ── برنامه معامله (Planned Trade) — همیشه قابل ویرایش است ── */}
-        <section className="space-y-6">
-          <h2 className="text-lg font-semibold border-b pb-2">۲ب. برنامه معامله (Planned)</h2>
-          <div className="grid grid-cols-1 min-[380px]:grid-cols-2 md:grid-cols-3 gap-4">
-            {[
-              { key: 'plannedEntry', label: 'ورود برنامه‌ریزی‌شده' },
-              { key: 'plannedSL', label: 'حد ضرر برنامه‌ریزی‌شده' },
-              { key: 'plannedTP', label: 'حد سود برنامه‌ریزی‌شده' },
-              { key: 'plannedRR', label: 'R:R برنامه‌ریزی‌شده' },
-              { key: 'plannedRisk', label: 'ریسک برنامه‌ریزی‌شده (%)' },
-              { key: 'plannedPositionSize', label: 'حجم برنامه‌ریزی‌شده' },
-            ].map(f => (
-              <div key={f.key} className="space-y-2">
-                <Label>{f.label}</Label>
-                <NumericInput
-                  value={(trade as any)[f.key]}
-                  onValueChange={value => handleChange(f.key as any, value)}
-                  placeholder="—"
-                />
-              </div>
-            ))}
           </div>
         </section>
 
@@ -1118,43 +1056,6 @@ export default function NewTrade() {
             </div>
           </div>
         </section>
-
-        {/* ── دلیل ورود ── */}
-        {!isQuickMode && (
-          <section className="space-y-4">
-            <h2 className="text-lg font-semibold border-b pb-2">۳ب. دلیل ورود</h2>
-            <div className="space-y-2">
-              <Label>دلیل ورود به معامله</Label>
-              <Textarea
-                placeholder="چرا وارد این معامله شدید؟ چه چیزی را در چارت دیدید؟ ستاپ چه بود؟"
-                value={(trade as any).entryReason || ''}
-                onChange={e => handleChange('entryReason' as any, e.target.value || null)}
-                className="min-h-[100px]"
-              />
-            </div>
-          </section>
-        )}
-
-        {!isQuickMode && (
-          <section className="space-y-4">
-            <div className="flex items-center justify-between gap-3 border-b pb-2">
-              <h2 className="text-lg font-semibold">۳ج. briefing پیش از معامله</h2>
-              <span className="text-xs text-muted-foreground">قابل ویرایش و ذخیره</span>
-            </div>
-            <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 space-y-2">
-              <Label>تصویر ذهنی و برنامهٔ اجرای معامله</Label>
-              <Textarea
-                placeholder="اگر بازار این شرایط را داشت وارد می‌شوم؛ اگر این شرط نقض شد، معامله را لغو می‌کنم…"
-                value={trade.preTradeBriefing || ''}
-                onChange={e => handleChange('preTradeBriefing' as any, e.target.value || null)}
-                className="min-h-[110px] bg-background/70"
-              />
-              <p className="text-xs text-muted-foreground">
-                این متن همراه معامله ذخیره می‌شود تا قبل و بعد از اجرا بتوانید برنامهٔ اولیه را مقایسه کنید.
-              </p>
-            </div>
-          </section>
-        )}
 
         {/* SECTION 4: Exit Details */}
         {trade.status === 'closed' && (
@@ -1448,8 +1349,8 @@ export default function NewTrade() {
                     <SelectTrigger className="h-8 w-28 text-xs"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="both">هر دو جهت</SelectItem>
-                      <SelectItem value="long">خرید (Long)</SelectItem>
-                      <SelectItem value="short">فروش (Short)</SelectItem>
+                           <SelectItem value="long">خرید (Buy)</SelectItem>
+                           <SelectItem value="short">فروش (Sell)</SelectItem>
                     </SelectContent>
                   </Select>
                   <Input
@@ -1481,8 +1382,8 @@ export default function NewTrade() {
                           <SelectTrigger className="h-8 w-28 text-xs"><SelectValue /></SelectTrigger>
                           <SelectContent>
                             <SelectItem value="both">هر دو جهت</SelectItem>
-                            <SelectItem value="long">خرید (Long)</SelectItem>
-                            <SelectItem value="short">فروش (Short)</SelectItem>
+                             <SelectItem value="long">خرید (Buy)</SelectItem>
+                             <SelectItem value="short">فروش (Sell)</SelectItem>
                           </SelectContent>
                         </Select>
                         <Input

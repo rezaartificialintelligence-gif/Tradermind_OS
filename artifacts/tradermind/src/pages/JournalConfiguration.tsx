@@ -4,8 +4,16 @@ import { toast } from 'sonner';
 import type { JournalOption } from '../db/database';
 import {
   JOURNAL_OPTION_CATEGORIES,
+  localizeJournalOptionLabel,
   journalSessionService,
 } from '../services/journalSessionService';
+import {
+  getJournalAnalysisFieldLabels,
+  JOURNAL_ANALYSIS_FIELD_LABELS,
+  saveJournalAnalysisFieldLabels,
+  type JournalAnalysisFieldKey,
+  type JournalAnalysisFieldLabels,
+} from '../services/journalAnalysisFieldLabels';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
@@ -21,6 +29,9 @@ export default function JournalConfiguration() {
   const [description, setDescription] = useState('');
   const [required, setRequired] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [analysisFieldLabels, setAnalysisFieldLabels] = useState<JournalAnalysisFieldLabels>(
+    JOURNAL_ANALYSIS_FIELD_LABELS,
+  );
 
   const categoryLabel = useMemo(
     () => JOURNAL_OPTION_CATEGORIES.find(category => category.id === categoryId)?.label ?? categoryId,
@@ -40,6 +51,7 @@ export default function JournalConfiguration() {
   }, [categoryId]);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => { setAnalysisFieldLabels(getJournalAnalysisFieldLabels()); }, []);
 
   const resetForm = () => {
     setEditingId(null);
@@ -50,7 +62,7 @@ export default function JournalConfiguration() {
 
   const startEdit = (option: JournalOption) => {
     setEditingId(option.id);
-    setLabel(option.label);
+    setLabel(localizeJournalOptionLabel(option.category, option.label));
     setDescription(option.description);
     setRequired(option.required ?? false);
   };
@@ -96,6 +108,16 @@ export default function JournalConfiguration() {
     }
   };
 
+  const saveAnalysisLabels = () => {
+    try {
+      saveJournalAnalysisFieldLabels(analysisFieldLabels);
+      setAnalysisFieldLabels(getJournalAnalysisFieldLabels());
+      toast.success('عنوان فیلدهای رویداد تحلیل ذخیره شد.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'ذخیرهٔ عنوان فیلدها انجام نشد.');
+    }
+  };
+
   return (
     <main className="mx-auto w-full max-w-5xl space-y-6 pb-10" dir="rtl">
       <header className="flex flex-wrap items-start justify-between gap-4">
@@ -107,6 +129,32 @@ export default function JournalConfiguration() {
         </div>
         <SlidersHorizontal className="h-6 w-6 text-primary" aria-hidden="true" />
       </header>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">عنوان فیلدهای رویداد تحلیل</CardTitle>
+          <CardDescription>نام کادرهای متنی، فهرست‌ها و گزینه‌های چندانتخابی را در رویداد تحلیل سشن شخصی‌سازی کنید.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {(Object.entries(JOURNAL_ANALYSIS_FIELD_LABELS) as [JournalAnalysisFieldKey, string][]).map(([key, defaultLabel]) => (
+              <label key={key} className="space-y-1.5 text-sm">
+                <span className="text-muted-foreground">{defaultLabel}</span>
+                <Input
+                  value={analysisFieldLabels[key]}
+                  onChange={event => setAnalysisFieldLabels(current => ({ ...current, [key]: event.target.value }))}
+                  aria-label={`عنوان فیلد ${defaultLabel}`}
+                  maxLength={100}
+                  data-testid={`input-analysis-field-label-${key}`}
+                />
+              </label>
+            ))}
+          </div>
+          <Button onClick={saveAnalysisLabels} className="gap-2" data-testid="button-save-analysis-field-labels">
+            <Save className="h-4 w-4" />ذخیرهٔ عنوان‌ها
+          </Button>
+        </CardContent>
+      </Card>
 
       <div className="grid gap-5 lg:grid-cols-[220px_minmax(0,1fr)]">
         <Card className="h-fit">
@@ -194,7 +242,7 @@ export default function JournalConfiguration() {
                     <div key={option.id} data-testid={`row-journal-option-${option.id}`} className="flex flex-wrap items-center gap-3 py-3">
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-medium break-words" data-testid={`text-journal-option-${option.id}`}>{option.label}</span>
+                           <span className="font-medium break-words" data-testid={`text-journal-option-${option.id}`}>{localizeJournalOptionLabel(option.category, option.label)}</span>
                           {option.category === 'checklist' && option.required && <Badge variant="outline">الزامی</Badge>}
                           {!option.enabled && <Badge variant="secondary">بایگانی</Badge>}
                         </div>
@@ -218,13 +266,13 @@ export default function JournalConfiguration() {
                         <Button
                           data-testid={`button-edit-option-${option.id}`}
                           size="icon" variant="ghost" className="h-8 w-8"
-                          aria-label={`ویرایش ${option.label}`}
+                          aria-label={`ویرایش ${localizeJournalOptionLabel(option.category, option.label)}`}
                           onClick={() => startEdit(option)}
                         ><Pencil className="h-4 w-4" /></Button>
                         <Button
                           data-testid={`button-toggle-option-${option.id}`}
                           size="icon" variant="ghost" className="h-8 w-8"
-                          aria-label={option.enabled ? `بایگانی ${option.label}` : `فعال‌سازی ${option.label}`}
+                          aria-label={option.enabled ? `بایگانی ${localizeJournalOptionLabel(option.category, option.label)}` : `فعال‌سازی ${localizeJournalOptionLabel(option.category, option.label)}`}
                           onClick={() => void toggleEnabled(option)}
                         >
                           {option.enabled ? <Archive className="h-4 w-4" /> : <RotateCcw className="h-4 w-4" />}

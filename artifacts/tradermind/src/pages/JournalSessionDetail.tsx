@@ -2,12 +2,17 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Link, useLocation, useParams } from 'wouter';
 import {
   ArrowRight, CalendarClock, Check, CircleAlert, FilePlus2, Film, Image as ImageIcon,
-  Paperclip, Plus, Save, ShieldCheck, Target, Trash2, TrendingDown, TrendingUp,
+  Paperclip, Pencil, Plus, Save, ShieldCheck, Target, Trash2, TrendingDown, TrendingUp, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { accountService } from '../services/accountService';
 import { journalSessionService, parseJournalArray, type JournalSessionBundle, type JournalSessionTimelineItem } from '../services/journalSessionService';
 import { tradingBoxService } from '../services/tradingBoxService';
+import {
+  getJournalAnalysisFieldLabels,
+  JOURNAL_ANALYSIS_FIELD_LABELS,
+  type JournalAnalysisFieldLabels,
+} from '../services/journalAnalysisFieldLabels';
 import type { JournalMedia, JournalOption, JournalSessionAnalysis, Trade, TradingBox } from '../db/database';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -32,6 +37,16 @@ type AnalysisDraft = {
   tags: string;
   previousTradeId: string;
   nextTradeId: string;
+};
+type TriggerDraft = {
+  timeframeOptionId: string;
+  analysisEventId: string;
+  triggerTypeOptionId: string;
+  description: string;
+  marketMovement: string;
+  directionOptionId: string;
+  confirmed: boolean;
+  notes: string;
 };
 const blankAnalysis = (): AnalysisDraft => ({
   analysisText: '', marketContext: '',
@@ -73,6 +88,9 @@ export default function JournalSessionDetail() {
     sessionQuality: null as number | null, finalReflection: '',
   });
   const [analysisDrafts, setAnalysisDrafts] = useState<Record<string, AnalysisDraft>>({});
+  const [analysisFieldLabels, setAnalysisFieldLabels] = useState<JournalAnalysisFieldLabels>(
+    JOURNAL_ANALYSIS_FIELD_LABELS,
+  );
   const [selectedTimeframeIds, setSelectedTimeframeIds] = useState<string[]>([]);
   const [analysisCreating, setAnalysisCreating] = useState(false);
   const [triggerDraft, setTriggerDraft] = useState({
@@ -80,6 +98,12 @@ export default function JournalSessionDetail() {
     description: '', marketMovement: '', directionOptionId: 'none', confirmed: true, notes: '',
   });
   const [triggerSaving, setTriggerSaving] = useState(false);
+  const [editingTriggerId, setEditingTriggerId] = useState<string | null>(null);
+  const [triggerEditDraft, setTriggerEditDraft] = useState<TriggerDraft>({
+    timeframeOptionId: '', analysisEventId: 'none', triggerTypeOptionId: 'none',
+    description: '', marketMovement: '', directionOptionId: 'none', confirmed: true, notes: '',
+  });
+  const [triggerEditSaving, setTriggerEditSaving] = useState(false);
   const [eventType, setEventType] = useState('');
   const [eventNotes, setEventNotes] = useState('');
   const [eventTime, setEventTime] = useState('');
@@ -96,6 +120,7 @@ export default function JournalSessionDetail() {
     if (!sessionId) { setLoading(false); setLoadError('شناسهٔ سشن معتبر نیست.'); return; }
     setLoading(true); setLoadError('');
     try {
+      setAnalysisFieldLabels(getJournalAnalysisFieldLabels());
       const result = await journalSessionService.getBundle(sessionId);
       if (!result) { setBundle(undefined); setLoadError('این سشن پیدا نشد یا از دستگاه حذف شده است.'); return; }
       setBundle(result);
@@ -248,6 +273,43 @@ export default function JournalSessionDetail() {
   const updateTriggerStatus = async (triggerId: string, status: 'pending' | 'ignored' | 'invalid') => {
     try { await journalSessionService.updateTriggerEvent(triggerId, { status }); await reload(); }
     catch (cause) { toast.error(cause instanceof Error ? cause.message : 'به‌روزرسانی وضعیت تریگر انجام نشد.'); }
+  };
+  const beginTriggerEdit = (triggerId: string) => {
+    const trigger = triggers.find(item => item.id === triggerId);
+    if (!trigger) return;
+    setTriggerEditDraft({
+      timeframeOptionId: trigger.timeframeOptionId,
+      analysisEventId: trigger.analysisEventId ?? 'none',
+      triggerTypeOptionId: trigger.triggerTypeOptionId ?? 'none',
+      description: trigger.description,
+      marketMovement: trigger.marketMovement,
+      directionOptionId: trigger.directionOptionId ?? 'none',
+      confirmed: trigger.confirmed,
+      notes: trigger.notes,
+    });
+    setEditingTriggerId(trigger.id);
+  };
+  const saveTriggerEdit = async (triggerId: string) => {
+    setTriggerEditSaving(true);
+    try {
+      await journalSessionService.updateTriggerEvent(triggerId, {
+        timeframeOptionId: triggerEditDraft.timeframeOptionId,
+        analysisEventId: triggerEditDraft.analysisEventId === 'none' ? null : triggerEditDraft.analysisEventId,
+        triggerTypeOptionId: triggerEditDraft.triggerTypeOptionId === 'none' ? null : triggerEditDraft.triggerTypeOptionId,
+        directionOptionId: triggerEditDraft.directionOptionId === 'none' ? null : triggerEditDraft.directionOptionId,
+        description: triggerEditDraft.description,
+        marketMovement: triggerEditDraft.marketMovement,
+        confirmed: triggerEditDraft.confirmed,
+        notes: triggerEditDraft.notes,
+      });
+      setEditingTriggerId(null);
+      toast.success('تغییرات تریگر ذخیره شد.');
+      await reload();
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : 'ذخیرهٔ تغییرات تریگر انجام نشد.');
+    } finally {
+      setTriggerEditSaving(false);
+    }
   };
   const saveSession = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -463,15 +525,15 @@ export default function JournalSessionDetail() {
                 <span className="text-[10px] text-muted-foreground">{localDate(analysis.createdAt)}</span>
               </div>
               <CardContent className="space-y-4 p-4">
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="space-y-1.5"><Label className="text-xs">تحلیل بازار</Label><Textarea rows={3} value={draft.analysisText} onChange={event => updateAnalysisDraft(analysis.id, { analysisText: event.target.value })} data-testid={`input-analysis-text-${analysis.id}`} /></div>
-                  <div className="space-y-1.5"><Label className="text-xs">زمینهٔ بازار</Label><Textarea rows={3} value={draft.marketContext} onChange={event => updateAnalysisDraft(analysis.id, { marketContext: event.target.value })} data-testid={`input-market-context-${analysis.id}`} /></div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                   <div className="space-y-1.5"><Label className="text-xs">{analysisFieldLabels.analysisText}</Label><Textarea rows={3} value={draft.analysisText} onChange={event => updateAnalysisDraft(analysis.id, { analysisText: event.target.value })} data-testid={`input-analysis-text-${analysis.id}`} /></div>
+                   <div className="space-y-1.5"><Label className="text-xs">{analysisFieldLabels.marketContext}</Label><Textarea rows={3} value={draft.marketContext} onChange={event => updateAnalysisDraft(analysis.id, { marketContext: event.target.value })} data-testid={`input-market-context-${analysis.id}`} /></div>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2">
-                  {selectField('جهت بازار', 'direction', draft.directionOptionId, value => updateAnalysisDraft(analysis.id, { directionOptionId: value }), `select-direction-${analysis.id}`)}
-                  {selectField('ساختار بازار', 'market_structure', draft.marketStructureOptionId, value => updateAnalysisDraft(analysis.id, { marketStructureOptionId: value }), `select-structure-${analysis.id}`)}
-                  {selectField('جهت مورد انتظار', 'direction', draft.expectedDirectionOptionId, value => updateAnalysisDraft(analysis.id, { expectedDirectionOptionId: value }), `select-expected-direction-${analysis.id}`)}
-                  <div className="space-y-1.5"><Label className="text-xs">زمینهٔ نقدینگی</Label>
+                   {selectField(analysisFieldLabels.directionOptionId, 'direction', draft.directionOptionId, value => updateAnalysisDraft(analysis.id, { directionOptionId: value }), `select-direction-${analysis.id}`)}
+                   {selectField(analysisFieldLabels.marketStructureOptionId, 'market_structure', draft.marketStructureOptionId, value => updateAnalysisDraft(analysis.id, { marketStructureOptionId: value }), `select-structure-${analysis.id}`)}
+                   {selectField(analysisFieldLabels.expectedDirectionOptionId, 'direction', draft.expectedDirectionOptionId, value => updateAnalysisDraft(analysis.id, { expectedDirectionOptionId: value }), `select-expected-direction-${analysis.id}`)}
+                   <div className="space-y-1.5"><Label className="text-xs">{analysisFieldLabels.liquidityContextOptionIds}</Label>
                     {liquidityOptions.length ? <div className="flex min-h-10 flex-wrap gap-1.5 rounded-md border border-input bg-background p-2" data-testid={`list-liquidity-options-${analysis.id}`}>
                       {liquidityOptions.map(option => {
                         const selected = draft.liquidityContextOptionIds.includes(option.id);
@@ -481,14 +543,14 @@ export default function JournalSessionDetail() {
                   </div>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="space-y-1.5"><Label className="text-xs">سناریوی مورد انتظار</Label><Textarea rows={2} value={draft.scenario} onChange={event => updateAnalysisDraft(analysis.id, { scenario: event.target.value })} data-testid={`input-analysis-scenario-${analysis.id}`} /></div>
-                  <div className="space-y-1.5"><Label className="text-xs">شرط فعال‌شدن یا لغو</Label><Textarea rows={2} value={draft.triggerContext} onChange={event => updateAnalysisDraft(analysis.id, { triggerContext: event.target.value })} data-testid={`input-analysis-trigger-context-${analysis.id}`} /></div>
-                  <div className="space-y-1.5"><Label className="text-xs">مناطق قیمت و سطوح</Label><Textarea rows={2} value={draft.zones} onChange={event => updateAnalysisDraft(analysis.id, { zones: event.target.value })} data-testid={`input-zones-${analysis.id}`} /></div>
-                  <div className="space-y-1.5"><Label className="text-xs">یادداشت تحلیل</Label><Textarea rows={2} value={draft.notes} onChange={event => updateAnalysisDraft(analysis.id, { notes: event.target.value })} data-testid={`input-analysis-notes-${analysis.id}`} /></div>
+                   <div className="space-y-1.5"><Label className="text-xs">{analysisFieldLabels.scenario}</Label><Textarea rows={2} value={draft.scenario} onChange={event => updateAnalysisDraft(analysis.id, { scenario: event.target.value })} data-testid={`input-analysis-scenario-${analysis.id}`} /></div>
+                   <div className="space-y-1.5"><Label className="text-xs">{analysisFieldLabels.triggerContext}</Label><Textarea rows={2} value={draft.triggerContext} onChange={event => updateAnalysisDraft(analysis.id, { triggerContext: event.target.value })} data-testid={`input-analysis-trigger-context-${analysis.id}`} /></div>
+                   <div className="space-y-1.5"><Label className="text-xs">{analysisFieldLabels.zones}</Label><Textarea rows={2} value={draft.zones} onChange={event => updateAnalysisDraft(analysis.id, { zones: event.target.value })} data-testid={`input-zones-${analysis.id}`} /></div>
+                   <div className="space-y-1.5"><Label className="text-xs">{analysisFieldLabels.notes}</Label><Textarea rows={2} value={draft.notes} onChange={event => updateAnalysisDraft(analysis.id, { notes: event.target.value })} data-testid={`input-analysis-notes-${analysis.id}`} /></div>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2">
                   {(['previousTradeId', 'nextTradeId'] as const).map((field, fieldIndex) => <div key={field} className="space-y-1.5">
-                    <Label className="text-xs">{fieldIndex === 0 ? 'معاملهٔ قبلی مرتبط' : 'معاملهٔ بعدی مرتبط'}</Label>
+                     <Label className="text-xs">{analysisFieldLabels[field]}</Label>
                     <Select value={draft[field]} onValueChange={value => updateAnalysisDraft(analysis.id, { [field]: value })}>
                       <SelectTrigger data-testid={`select-${field}-${analysis.id}`}><SelectValue placeholder="بدون پیوند" /></SelectTrigger>
                       <SelectContent><SelectItem value="none">بدون پیوند</SelectItem>{bundle.trades.map(trade => <SelectItem key={trade.id} value={trade.id}>{trade.symbol} · {localDate(trade.openedAt)}</SelectItem>)}</SelectContent>
@@ -496,7 +558,7 @@ export default function JournalSessionDetail() {
                   </div>)}
                 </div>
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-                  <div className="flex-1 space-y-1.5"><Label className="text-xs">برچسب‌های تحلیل</Label><Input placeholder="ساختار تمیز، نیازمند تأیید" value={draft.tags} onChange={event => updateAnalysisDraft(analysis.id, { tags: event.target.value })} data-testid={`input-analysis-tags-${analysis.id}`} /></div>
+                  <div className="flex-1 space-y-1.5"><Label className="text-xs">{analysisFieldLabels.tags}</Label><Input placeholder="ساختار تمیز، نیازمند تأیید" value={draft.tags} onChange={event => updateAnalysisDraft(analysis.id, { tags: event.target.value })} data-testid={`input-analysis-tags-${analysis.id}`} /></div>
                   <Button type="button" onClick={() => void saveAnalysis(analysis.id)} disabled={saving} className="gap-2" data-testid={`button-save-analysis-${analysis.id}`}><Save className="h-4 w-4" />ذخیره رویداد</Button>
                   <Button type="button" variant="ghost" onClick={() => void deleteAnalysis(analysis.id)} className="gap-2 text-destructive" data-testid={`button-delete-analysis-${analysis.id}`}><Trash2 className="h-4 w-4" />حذف</Button>
                 </div>
@@ -540,20 +602,53 @@ export default function JournalSessionDetail() {
       </Card>
       <Card className="tradermind-card overflow-hidden" data-testid="list-trigger-events">
         {triggers.length === 0 ? <CardContent className="p-5 text-center text-sm text-muted-foreground" data-testid="empty-trigger-events">تریگری ثبت نشده است.</CardContent> : <div className="divide-y divide-border/70">
-          {triggers.map(trigger => <div key={trigger.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start" data-testid={`row-trigger-${trigger.id}`}>
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2"><Badge variant="outline">{optionLabel(trigger.timeframeOptionId, 'تایم‌فریم حذف‌شده')}</Badge><Badge variant={trigger.status === 'converted' ? 'default' : 'secondary'}>{trigger.status === 'converted' ? 'متصل به معامله' : trigger.status === 'ignored' ? 'نادیده' : trigger.status === 'invalid' ? 'نامعتبر' : 'در انتظار'}</Badge><span className="text-xs text-muted-foreground">{optionLabel(trigger.triggerTypeOptionId, 'تریگر')}</span></div>
-              <p className="mt-2 whitespace-pre-wrap text-sm font-medium">{trigger.description || 'بدون شرح'}</p>
-              {trigger.marketMovement && <p className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">{trigger.marketMovement}</p>}
-              <p className="mt-1 text-[10px] text-muted-foreground">{localDate(trigger.createdAt)} · {trigger.confirmed ? 'تأییدشده' : 'تأییدنشده'}</p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              {!trigger.linkedTradeId ? <Select value={trigger.status} onValueChange={value => void updateTriggerStatus(trigger.id, value as 'pending' | 'ignored' | 'invalid')}>
-                <SelectTrigger className="h-8 w-32 text-xs" data-testid={`select-trigger-status-${trigger.id}`}><SelectValue /></SelectTrigger>
-                <SelectContent><SelectItem value="pending">در انتظار</SelectItem><SelectItem value="ignored">نادیده</SelectItem><SelectItem value="invalid">نامعتبر</SelectItem></SelectContent>
-              </Select> : <Link href={`/journal/trades/${trigger.linkedTradeId}`} className="rounded-md border px-3 py-2 text-xs text-primary" data-testid={`link-trigger-trade-${trigger.id}`}>مشاهدهٔ معامله</Link>}
-              {!trigger.linkedTradeId && <Button type="button" size="sm" variant="outline" disabled={!trigger.confirmed} onClick={() => setLocation(`/journal/trades/new?journalSessionId=${encodeURIComponent(sessionId)}&journalTriggerId=${encodeURIComponent(trigger.id)}&returnTo=${encodeURIComponent(`/journal/sessions/${sessionId}`)}`)} data-testid={`button-start-trigger-trade-${trigger.id}`}>ثبت معامله</Button>}
-            </div>
+          {triggers.map(trigger => <div key={trigger.id} className="p-4" data-testid={`row-trigger-${trigger.id}`}>
+            {editingTriggerId === trigger.id ? (
+              <div className="space-y-3" data-testid={`form-edit-trigger-${trigger.id}`}>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-1.5"><Label className="text-xs">بازهٔ زمانی</Label><Select value={triggerEditDraft.timeframeOptionId} onValueChange={value => setTriggerEditDraft(current => ({ ...current, timeframeOptionId: value }))}>
+                    <SelectTrigger data-testid={`select-edit-trigger-timeframe-${trigger.id}`}><SelectValue /></SelectTrigger><SelectContent>{timeframes.map(option => <SelectItem key={option.id} value={option.id}>{option.label}</SelectItem>)}</SelectContent>
+                  </Select></div>
+                  <div className="space-y-1.5"><Label className="text-xs">تحلیل مرتبط</Label><Select value={triggerEditDraft.analysisEventId} onValueChange={value => setTriggerEditDraft(current => ({ ...current, analysisEventId: value }))}>
+                    <SelectTrigger data-testid={`select-edit-trigger-analysis-${trigger.id}`}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">بدون تحلیل مرتبط</SelectItem>{analyses.map(analysis => <SelectItem key={analysis.id} value={analysis.id}>{optionLabel(analysis.timeframeOptionId, 'تحلیل')} · {localDate(analysis.createdAt)}</SelectItem>)}</SelectContent>
+                  </Select></div>
+                  <div className="space-y-1.5"><Label className="text-xs">نوع تریگر</Label><Select value={triggerEditDraft.triggerTypeOptionId} onValueChange={value => setTriggerEditDraft(current => ({ ...current, triggerTypeOptionId: value }))}>
+                    <SelectTrigger data-testid={`select-edit-trigger-type-${trigger.id}`}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">ثبت نشده</SelectItem>{triggerTypes.map(option => <SelectItem key={option.id} value={option.id}>{option.label}</SelectItem>)}</SelectContent>
+                  </Select></div>
+                  <div className="space-y-1.5"><Label className="text-xs">جهت</Label><Select value={triggerEditDraft.directionOptionId} onValueChange={value => setTriggerEditDraft(current => ({ ...current, directionOptionId: value }))}>
+                    <SelectTrigger data-testid={`select-edit-trigger-direction-${trigger.id}`}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">ثبت نشده</SelectItem>{directions.map(option => <SelectItem key={option.id} value={option.id}>{option.label}</SelectItem>)}</SelectContent>
+                  </Select></div>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-1.5"><Label className="text-xs">شرح تریگر</Label><Textarea rows={2} value={triggerEditDraft.description} onChange={event => setTriggerEditDraft(current => ({ ...current, description: event.target.value }))} data-testid={`input-edit-trigger-description-${trigger.id}`} /></div>
+                  <div className="space-y-1.5"><Label className="text-xs">حرکت قیمت و واکنش بازار</Label><Textarea rows={2} value={triggerEditDraft.marketMovement} onChange={event => setTriggerEditDraft(current => ({ ...current, marketMovement: event.target.value }))} data-testid={`input-edit-trigger-market-movement-${trigger.id}`} /></div>
+                  <div className="space-y-1.5 sm:col-span-2"><Label className="text-xs">یادداشت تریگر</Label><Textarea rows={2} value={triggerEditDraft.notes} onChange={event => setTriggerEditDraft(current => ({ ...current, notes: event.target.value }))} data-testid={`input-edit-trigger-notes-${trigger.id}`} /></div>
+                </div>
+                <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={triggerEditDraft.confirmed} onChange={event => setTriggerEditDraft(current => ({ ...current, confirmed: event.target.checked }))} data-testid={`checkbox-edit-trigger-confirmed-${trigger.id}`} />تریگر تأیید شده است</label>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" size="sm" onClick={() => void saveTriggerEdit(trigger.id)} disabled={triggerEditSaving} className="gap-2" data-testid={`button-save-trigger-edit-${trigger.id}`}><Save className="h-4 w-4" />ذخیرهٔ تغییرات</Button>
+                  <Button type="button" size="sm" variant="outline" onClick={() => setEditingTriggerId(null)} disabled={triggerEditSaving} className="gap-2" data-testid={`button-cancel-trigger-edit-${trigger.id}`}><X className="h-4 w-4" />انصراف</Button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2"><Badge variant="outline">{optionLabel(trigger.timeframeOptionId, 'بازهٔ زمانی حذف‌شده')}</Badge><Badge variant={trigger.status === 'converted' ? 'default' : 'secondary'}>{trigger.status === 'converted' ? 'متصل به معامله' : trigger.status === 'ignored' ? 'نادیده' : trigger.status === 'invalid' ? 'نامعتبر' : 'در انتظار'}</Badge><span className="text-xs text-muted-foreground">{optionLabel(trigger.triggerTypeOptionId, 'تریگر')}</span></div>
+                  <p className="mt-2 whitespace-pre-wrap text-sm font-medium">{trigger.description || 'بدون شرح'}</p>
+                  {trigger.marketMovement && <p className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">{trigger.marketMovement}</p>}
+                  {trigger.notes && <p className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">{trigger.notes}</p>}
+                  <p className="mt-1 text-[10px] text-muted-foreground">{localDate(trigger.createdAt)} · {trigger.confirmed ? 'تأییدشده' : 'تأییدنشده'}</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button type="button" size="sm" variant="outline" onClick={() => beginTriggerEdit(trigger.id)} className="gap-1.5" data-testid={`button-edit-trigger-${trigger.id}`}><Pencil className="h-3.5 w-3.5" />ویرایش</Button>
+                  {!trigger.linkedTradeId ? <Select value={trigger.status} onValueChange={value => void updateTriggerStatus(trigger.id, value as 'pending' | 'ignored' | 'invalid')}>
+                    <SelectTrigger className="h-8 w-32 text-xs" data-testid={`select-trigger-status-${trigger.id}`}><SelectValue /></SelectTrigger>
+                    <SelectContent><SelectItem value="pending">در انتظار</SelectItem><SelectItem value="ignored">نادیده</SelectItem><SelectItem value="invalid">نامعتبر</SelectItem></SelectContent>
+                  </Select> : <Link href={`/journal/trades/${trigger.linkedTradeId}`} className="rounded-md border px-3 py-2 text-xs text-primary" data-testid={`link-trigger-trade-${trigger.id}`}>مشاهدهٔ معامله</Link>}
+                  {!trigger.linkedTradeId && <Button type="button" size="sm" variant="outline" disabled={!trigger.confirmed} onClick={() => setLocation(`/journal/trades/new?journalSessionId=${encodeURIComponent(sessionId)}&journalTriggerId=${encodeURIComponent(trigger.id)}&returnTo=${encodeURIComponent(`/journal/sessions/${sessionId}`)}`)} data-testid={`button-start-trigger-trade-${trigger.id}`}>ثبت معامله</Button>}
+                </div>
+              </div>
+            )}
           </div>)}
         </div>}
       </Card>

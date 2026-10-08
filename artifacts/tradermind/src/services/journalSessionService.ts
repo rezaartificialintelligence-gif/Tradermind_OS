@@ -15,8 +15,8 @@ import {
 import { getNetPnl, isBreakEven, isClosed, isLoss, isWin } from '../lib/tradeHelpers';
 
 export const JOURNAL_OPTION_CATEGORIES = [
-  { id: 'timeframe', label: 'تایم‌فریم' },
-  { id: 'entry_trigger', label: 'تریگر ورود' },
+  { id: 'timeframe', label: 'بازهٔ زمانی' },
+  { id: 'entry_trigger', label: 'محرک ورود' },
   { id: 'exit_reason', label: 'دلیل خروج' },
   { id: 'entry_reason', label: 'دلیل ورود' },
   { id: 'psychology', label: 'حالت روانی' },
@@ -38,39 +38,148 @@ export const JOURNAL_OPTION_CATEGORIES = [
   { id: 'direction', label: 'جهت بازار' },
   { id: 'market_structure', label: 'ساختار بازار' },
   { id: 'session_event_type', label: 'رویداد بدون معامله' },
-  { id: 'sco_type', label: 'نوع SCO' },
-  { id: 'fvg_type', label: 'نوع FVG' },
+  { id: 'sco_type', label: 'نوع شکست ساختار (SCO)' },
+  { id: 'fvg_type', label: 'نوع شکاف ارزش منصفانه (FVG)' },
 ] as const;
 
 export type JournalOptionCategory = typeof JOURNAL_OPTION_CATEGORIES[number]['id'];
 
 const DEFAULT_OPTIONS: Record<JournalOptionCategory, string[]> = {
-  timeframe: ['1M', '5M', '15M', '30M', '1H', '4H', 'Daily', 'Weekly'],
-  entry_trigger: ['Liquidity Hunt', 'SCO', 'FVG Candle', 'Mitigation', 'Order Block'],
-  exit_reason: ['TP', 'SL', 'Manual Exit', 'Structure Changed', 'Liquidity Taken', 'Psychology', 'Risk Reduction', 'Strategy Invalidated'],
-  entry_reason: ['Strategy Setup', 'Breakout', 'Pullback', 'Liquidity Sweep', 'Custom'],
-  psychology: ['Calm', 'Fear', 'FOMO', 'Revenge', 'Hesitation', 'Greed', 'Overconfidence', 'Impatience', 'Stress', 'Anxiety'],
-  emotion: ['Calm', 'Confident', 'Focused', 'Fearful', 'Anxious', 'Frustrated', 'Greedy', 'Impatient'],
+  timeframe: ['1M', '5M', '15M', '30M', '1H', '4H', 'روزانه', 'هفتگی'],
+  entry_trigger: ['شکار نقدینگی', 'SCO', 'کندل FVG', 'بازآزمایی ناحیه', 'بلاک سفارش'],
+  exit_reason: ['حد سود', 'حد ضرر', 'خروج دستی', 'تغییر ساختار', 'جمع‌آوری نقدینگی', 'وضعیت روانی', 'کاهش ریسک', 'ابطال استراتژی'],
+  entry_reason: ['ستاپ استراتژی', 'شکست', 'پولبک', 'جاروب نقدینگی', 'سفارشی'],
+  psychology: ['آرامش', 'ترس', 'فومو', 'معاملهٔ انتقامی', 'تردید', 'طمع', 'اعتمادبه‌نفس بیش‌ازحد', 'بی‌صبری', 'فشار روانی', 'اضطراب'],
+  emotion: ['آرامش', 'اعتمادبه‌نفس', 'تمرکز', 'ترس', 'اضطراب', 'کلافگی', 'طمع', 'بی‌صبری'],
   strategy_rule: [],
-  checklist: ['HTF Direction Confirmed', 'Liquidity Swept', 'Trigger Confirmed', 'Momentum Valid', 'No Major Obstacle', 'Risk Valid'],
-  setup_type: ['Continuation', 'Reversal', 'Breakout', 'Pullback', 'Range', 'Liquidity Sweep'],
-  setup_grade: ['A+', 'A', 'B', 'C', 'Invalid'],
-  market_condition: ['Trending', 'Ranging', 'High Volatility', 'Low Volatility', 'News'],
-  market: ['Forex', 'Crypto', 'Stocks', 'Indices', 'Commodities', 'Futures', 'Other'],
-  scenario_outcome: ['Matched', 'Partially Matched', 'Invalidated', 'Not Triggered', 'Unclear'],
-  liquidity_type: ['Equal Highs', 'Equal Lows', 'Previous High', 'Previous Low', 'Session High/Low'],
-  mistake: ['Early Entry', 'Late Entry', 'FOMO', 'Revenge Trade', 'Ignored Rule', 'Ignored Obstacle', 'Oversized Position', 'Moved SL', 'Closed Early'],
-  tag: ['A Setup', 'Needs Review'],
-  obstacle: ['Mitigation Wall', 'Order Block', 'Fair Value Gap', 'News Event'],
-  trade_management: ['Moved Stop Loss', 'Partial Close', 'Added to Position', 'Reduced Position', 'Manual Exit'],
-  session_type: ['Asia', 'London', 'London/New York Overlap', 'New York', 'Custom'],
-  review_category: ['Execution', 'Risk', 'Psychology', 'Market Context', 'Strategy'],
-  direction: ['Bullish', 'Bearish', 'Neutral'],
-  market_structure: ['Uptrend', 'Downtrend', 'Range', 'Breakout', 'Reversal'],
-  session_event_type: ['Valid Setup — No Trade', 'Missed Trade', 'Invalid Setup', 'Observed Setup'],
+  checklist: ['جهت تایم‌فریم بالاتر تأیید شد', 'نقدینگی جمع‌آوری شد', 'تریگر تأیید شد', 'مومنتوم معتبر است', 'مانع مهمی وجود ندارد', 'ریسک معتبر است'],
+  setup_type: ['ادامهٔ روند', 'بازگشت روند', 'شکست', 'پولبک', 'محدوده', 'جاروب نقدینگی'],
+  setup_grade: ['A+', 'A', 'B', 'C', 'نامعتبر'],
+  market_condition: ['رونددار', 'محدوده‌ای', 'نوسان زیاد', 'نوسان کم', 'خبر'],
+  market: ['فارکس', 'رمزارز', 'سهام', 'شاخص‌ها', 'کالاها', 'قراردادهای آتی', 'سایر'],
+  scenario_outcome: ['مطابق سناریو', 'تا حدی مطابق', 'باطل‌شده', 'فعال‌نشده', 'نامشخص'],
+  liquidity_type: ['سقف‌های برابر', 'کف‌های برابر', 'سقف قبلی', 'کف قبلی', 'سقف/کف سشن'],
+  mistake: ['ورود زودهنگام', 'ورود دیرهنگام', 'فومو', 'معاملهٔ انتقامی', 'نادیده‌گرفتن قانون', 'نادیده‌گرفتن مانع', 'حجم بیش‌ازحد', 'جابجایی حد ضرر', 'خروج زودهنگام'],
+  tag: ['ستاپ A', 'نیازمند بازبینی'],
+  obstacle: ['ناحیهٔ بازآزمایی', 'بلاک سفارش', 'شکاف ارزش منصفانه', 'رویداد خبری'],
+  trade_management: ['جابجایی حد ضرر', 'بستن بخشی از معامله', 'افزودن به موقعیت', 'کاهش موقعیت', 'خروج دستی'],
+  session_type: ['آسیا', 'لندن', 'همپوشانی لندن و نیویورک', 'نیویورک', 'سفارشی'],
+  review_category: ['اجرا', 'ریسک', 'روان‌شناسی', 'زمینهٔ بازار', 'استراتژی'],
+  direction: ['صعودی', 'نزولی', 'خنثی'],
+  market_structure: ['روند صعودی', 'روند نزولی', 'محدوده', 'شکست', 'بازگشت'],
+  session_event_type: ['ستاپ معتبر، بدون معامله', 'معاملهٔ ازدست‌رفته', 'ستاپ نامعتبر', 'ستاپ مشاهده‌شده'],
   sco_type: [],
   fvg_type: [],
 };
+
+const DEFAULT_OPTION_TRANSLATIONS: Record<string, string> = {
+  'Daily': 'روزانه',
+  'Weekly': 'هفتگی',
+  'Liquidity Hunt': 'شکار نقدینگی',
+  'FVG Candle': 'کندل FVG',
+  'Mitigation': 'بازآزمایی ناحیه',
+  'Order Block': 'بلاک سفارش',
+  'TP': 'حد سود',
+  'SL': 'حد ضرر',
+  'Manual Exit': 'خروج دستی',
+  'Structure Changed': 'تغییر ساختار',
+  'Liquidity Taken': 'جمع‌آوری نقدینگی',
+  'Psychology': 'وضعیت روانی',
+  'Risk Reduction': 'کاهش ریسک',
+  'Strategy Invalidated': 'ابطال استراتژی',
+  'Strategy Setup': 'ستاپ استراتژی',
+  'Breakout': 'شکست',
+  'Pullback': 'پولبک',
+  'Liquidity Sweep': 'جاروب نقدینگی',
+  'Custom': 'سفارشی',
+  'Calm': 'آرامش',
+  'Fear': 'ترس',
+  'FOMO': 'فومو',
+  'Revenge': 'معاملهٔ انتقامی',
+  'Hesitation': 'تردید',
+  'Greed': 'طمع',
+  'Overconfidence': 'اعتمادبه‌نفس بیش‌ازحد',
+  'Impatience': 'بی‌صبری',
+  'Stress': 'فشار روانی',
+  'Anxiety': 'اضطراب',
+  'Confident': 'اعتمادبه‌نفس',
+  'Focused': 'تمرکز',
+  'Fearful': 'ترس',
+  'Anxious': 'اضطراب',
+  'Frustrated': 'کلافگی',
+  'Greedy': 'طمع',
+  'Impatient': 'بی‌صبری',
+  'HTF Direction Confirmed': 'جهت تایم‌فریم بالاتر تأیید شد',
+  'Liquidity Swept': 'نقدینگی جمع‌آوری شد',
+  'Trigger Confirmed': 'تریگر تأیید شد',
+  'Momentum Valid': 'مومنتوم معتبر است',
+  'No Major Obstacle': 'مانع مهمی وجود ندارد',
+  'Risk Valid': 'ریسک معتبر است',
+  'Continuation': 'ادامهٔ روند',
+  'Reversal': 'بازگشت روند',
+  'Range': 'محدوده',
+  'Invalid': 'نامعتبر',
+  'Trending': 'رونددار',
+  'Ranging': 'محدوده‌ای',
+  'High Volatility': 'نوسان زیاد',
+  'Low Volatility': 'نوسان کم',
+  'News': 'خبر',
+  'Forex': 'فارکس',
+  'Crypto': 'رمزارز',
+  'Stocks': 'سهام',
+  'Indices': 'شاخص‌ها',
+  'Commodities': 'کالاها',
+  'Futures': 'قراردادهای آتی',
+  'Other': 'سایر',
+  'Matched': 'مطابق سناریو',
+  'Partially Matched': 'تا حدی مطابق',
+  'Invalidated': 'باطل‌شده',
+  'Not Triggered': 'فعال‌نشده',
+  'Unclear': 'نامشخص',
+  'Equal Highs': 'سقف‌های برابر',
+  'Equal Lows': 'کف‌های برابر',
+  'Previous High': 'سقف قبلی',
+  'Previous Low': 'کف قبلی',
+  'Session High/Low': 'سقف/کف سشن',
+  'Early Entry': 'ورود زودهنگام',
+  'Late Entry': 'ورود دیرهنگام',
+  'Revenge Trade': 'معاملهٔ انتقامی',
+  'Ignored Rule': 'نادیده‌گرفتن قانون',
+  'Ignored Obstacle': 'نادیده‌گرفتن مانع',
+  'Oversized Position': 'حجم بیش‌ازحد',
+  'Moved SL': 'جابجایی حد ضرر',
+  'Closed Early': 'خروج زودهنگام',
+  'A Setup': 'ستاپ A',
+  'Needs Review': 'نیازمند بازبینی',
+  'Mitigation Wall': 'ناحیهٔ بازآزمایی',
+  'Fair Value Gap': 'شکاف ارزش منصفانه',
+  'News Event': 'رویداد خبری',
+  'Moved Stop Loss': 'جابجایی حد ضرر',
+  'Partial Close': 'بستن بخشی از معامله',
+  'Added to Position': 'افزودن به موقعیت',
+  'Reduced Position': 'کاهش موقعیت',
+  'Asia': 'آسیا',
+  'London': 'لندن',
+  'London/New York Overlap': 'همپوشانی لندن و نیویورک',
+  'New York': 'نیویورک',
+  'Execution': 'اجرا',
+  'Risk': 'ریسک',
+  'Market Context': 'زمینهٔ بازار',
+  'Strategy': 'استراتژی',
+  'Bullish': 'صعودی',
+  'Bearish': 'نزولی',
+  'Neutral': 'خنثی',
+  'Uptrend': 'روند صعودی',
+  'Downtrend': 'روند نزولی',
+  'Valid Setup — No Trade': 'ستاپ معتبر، بدون معامله',
+  'Missed Trade': 'معاملهٔ ازدست‌رفته',
+  'Invalid Setup': 'ستاپ نامعتبر',
+  'Observed Setup': 'ستاپ مشاهده‌شده',
+};
+
+export function localizeJournalOptionLabel(_category: string, label: string): string {
+  return DEFAULT_OPTION_TRANSLATIONS[label] ?? label;
+}
 
 export interface CreateJournalSessionInput {
   accountId: string;
@@ -473,11 +582,40 @@ export const journalSessionService = {
     return event;
   },
 
-  async updateTriggerEvent(id: string, patch: Partial<Pick<JournalTriggerEvent, 'status' | 'confirmed' | 'notes'>>): Promise<void> {
+  async updateTriggerEvent(
+    id: string,
+    patch: Partial<Pick<JournalTriggerEvent,
+      | 'status'
+      | 'confirmed'
+      | 'notes'
+      | 'timeframeOptionId'
+      | 'analysisEventId'
+      | 'triggerTypeOptionId'
+      | 'description'
+      | 'marketMovement'
+      | 'directionOptionId'
+    >>,
+  ): Promise<void> {
     const event = await db.journalTriggerEvents.get(id);
     if (!event) throw new Error('رویداد تریگر پیدا نشد.');
     if (event.linkedTradeId && patch.status && patch.status !== 'converted') {
       throw new Error('تریگرِ پیوندخورده به معامله را نمی‌توان به وضعیت دیگری تغییر داد.');
+    }
+    if ('timeframeOptionId' in patch) {
+      const option = patch.timeframeOptionId ? await db.journalOptions.get(patch.timeframeOptionId) : undefined;
+      if (!option || option.category !== 'timeframe') throw new Error('بازهٔ زمانی معتبر انتخاب نشده است.');
+    }
+    if ('analysisEventId' in patch && patch.analysisEventId) {
+      const analysis = await db.journalSessionAnalyses.get(patch.analysisEventId);
+      if (!analysis || analysis.sessionId !== event.sessionId) throw new Error('تحلیل انتخاب‌شده به این سشن تعلق ندارد.');
+    }
+    if ('triggerTypeOptionId' in patch && patch.triggerTypeOptionId) {
+      const option = await db.journalOptions.get(patch.triggerTypeOptionId);
+      if (!option || option.category !== 'entry_trigger') throw new Error('نوع تریگر معتبر انتخاب نشده است.');
+    }
+    if ('directionOptionId' in patch && patch.directionOptionId) {
+      const option = await db.journalOptions.get(patch.directionOptionId);
+      if (!option || option.category !== 'direction') throw new Error('جهت انتخاب‌شده معتبر نیست.');
     }
     await db.journalTriggerEvents.update(id, { ...patch, updatedAt: Date.now() });
   },

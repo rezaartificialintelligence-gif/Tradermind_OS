@@ -5,6 +5,7 @@ import { db } from '../../db/database';
 import { accountService } from '../accountService';
 import { backupService } from '../backupService';
 import { journalSessionService } from '../journalSessionService';
+import { JOURNAL_ANALYSIS_FIELD_LABELS_STORAGE_KEY } from '../journalAnalysisFieldLabels';
 import { strategyService } from '../strategyService';
 import { tradeService } from '../tradeService';
 import { tradingBoxService } from '../tradingBoxService';
@@ -227,7 +228,7 @@ describe('journalSessionService', () => {
     expect(filtered.tradeData).toHaveLength(1);
   });
 
-  it('upserts timeframe analysis and records no-trade events', async () => {
+  it('creates independent timeframe analysis events and records no-trade events', async () => {
     const { session } = await seedSession();
     const timeframe = await db.journalOptions.where('category').equals('timeframe').first();
     const eventType = await db.journalOptions.where('category').equals('session_event_type').first();
@@ -255,8 +256,8 @@ describe('journalSessionService', () => {
       notes: 'Updated',
       tags: '[]',
     });
-    expect(second.id).toBe(first.id);
-    expect(await db.journalSessionAnalyses.count()).toBe(1);
+    expect(second.id).not.toBe(first.id);
+    expect(await db.journalSessionAnalyses.count()).toBe(2);
 
     const event = await journalSessionService.addEvent({
       sessionId: session.id,
@@ -267,6 +268,57 @@ describe('journalSessionService', () => {
     expect((await journalSessionService.getBundle(session.id))?.events).toContainEqual(event);
     await journalSessionService.deleteEvent(event.id);
     expect(await db.journalSessionEvents.count()).toBe(0);
+  });
+
+  it('updates trigger details while preserving its trade-session link', async () => {
+    const { session } = await seedSession();
+    const timeframe = await db.journalOptions.where('category').equals('timeframe').first();
+    const triggerType = await db.journalOptions.where('category').equals('entry_trigger').first();
+    const direction = await db.journalOptions.where('category').equals('direction').first();
+    expect(timeframe && triggerType && direction).toBeTruthy();
+
+    const trigger = await journalSessionService.createTriggerEvent({
+      sessionId: session.id,
+      timeframeOptionId: timeframe!.id,
+      analysisEventId: null,
+      triggerTypeOptionId: triggerType!.id,
+      description: 'First description',
+      marketMovement: 'First movement',
+      directionOptionId: null,
+      confirmed: true,
+      notes: 'First note',
+    });
+    await journalSessionService.updateTriggerEvent(trigger.id, {
+      timeframeOptionId: timeframe!.id,
+      analysisEventId: null,
+      triggerTypeOptionId: triggerType!.id,
+      description: 'Edited description',
+      marketMovement: 'Edited movement',
+      directionOptionId: direction!.id,
+      confirmed: false,
+      notes: 'Edited note',
+    });
+
+    expect(await db.journalTriggerEvents.get(trigger.id)).toMatchObject({
+      sessionId: session.id,
+      description: 'Edited description',
+      marketMovement: 'Edited movement',
+      directionOptionId: direction!.id,
+      confirmed: false,
+      notes: 'Edited note',
+    });
+  });
+
+  it('includes customized analysis field labels in exported settings', () => {
+    const previousValue = localStorage.getItem(JOURNAL_ANALYSIS_FIELD_LABELS_STORAGE_KEY);
+    const customLabels = JSON.stringify({ analysisText: 'تحلیل سفارشی' });
+    localStorage.setItem(JOURNAL_ANALYSIS_FIELD_LABELS_STORAGE_KEY, customLabels);
+    try {
+      expect(backupService.exportSettings()[JOURNAL_ANALYSIS_FIELD_LABELS_STORAGE_KEY]).toBe(customLabels);
+    } finally {
+      if (previousValue === null) localStorage.removeItem(JOURNAL_ANALYSIS_FIELD_LABELS_STORAGE_KEY);
+      else localStorage.setItem(JOURNAL_ANALYSIS_FIELD_LABELS_STORAGE_KEY, previousValue);
+    }
   });
 
   it('round-trips session media through replace restore and removes trade media with its trade', async () => {

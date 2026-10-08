@@ -6,6 +6,7 @@ import { db, Trade, Strategy, Phase, Step, Rule, AnalysisSession, DailyJournal, 
 import { securityService } from '../security/securityService';
 import { APP_VERSION, DB_VERSION, BACKUP_FORMAT_VERSION, SCHEMA_VERSION } from '../constants/version';
 import { getNetPnl } from '../lib/tradeHelpers';
+import { JOURNAL_ANALYSIS_FIELD_LABELS_STORAGE_KEY } from './journalAnalysisFieldLabels';
 
 export { APP_VERSION, DB_VERSION, BACKUP_FORMAT_VERSION, SCHEMA_VERSION };
 
@@ -759,6 +760,8 @@ export const backupService = {
     if (val) settings[STORAGE_KEY_APP] = val;
     const customSymbols = localStorage.getItem('tradermind-custom-symbols');
     if (customSymbols) settings['tradermind-custom-symbols'] = customSymbols;
+    const analysisFieldLabels = localStorage.getItem(JOURNAL_ANALYSIS_FIELD_LABELS_STORAGE_KEY);
+    if (analysisFieldLabels) settings[JOURNAL_ANALYSIS_FIELD_LABELS_STORAGE_KEY] = analysisFieldLabels;
     return settings;
   },
 

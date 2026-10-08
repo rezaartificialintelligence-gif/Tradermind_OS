@@ -305,6 +305,40 @@ function optionRecord(
   };
 }
 
+function tradeDirectionFromOption(option: JournalOption | undefined | null): Trade['direction'] | null {
+  if (!option || option.category !== 'direction') return null;
+  const label = localizeJournalOptionLabel(option.category, option.label).trim().toLocaleLowerCase();
+  if (['صعودی', 'خرید', 'long', 'buy', 'bullish', 'up'].includes(label)) return 'long';
+  if (['نزولی', 'فروش', 'short', 'sell', 'bearish', 'down'].includes(label)) return 'short';
+  return null;
+}
+
+function blankJournalTradeData(tradeId: string, journalSessionId: string, now: number): JournalTradeData {
+  const emptyPhase = { optionIds: [] as string[], intensity: 0 };
+  return {
+    id: tradeId,
+    tradeId,
+    journalSessionId,
+    entryTriggerOptionIds: '[]',
+    entryReasonOptionId: null,
+    exitReasonOptionId: null,
+    setupTypeOptionId: null,
+    setupGradeOptionId: null,
+    scoTypeOptionId: null,
+    fvgTypeOptionId: null,
+    scenarioOutcomeOptionId: null,
+    checklistResults: '{}',
+    psychology: JSON.stringify({ before: emptyPhase, during: emptyPhase, after: emptyPhase }),
+    mistakeOptionIds: '[]',
+    strategyCompliance: null,
+    violatedRuleIds: '[]',
+    setupQuality: null,
+    executionQuality: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
 async function createVersionSnapshot(strategyId: string): Promise<StrategyVersion> {
   const strategy = await db.strategies.get(strategyId);
   if (!strategy) throw new Error('استراتژی انتخاب‌شده پیدا نشد.');
@@ -575,6 +609,8 @@ export const journalSessionService = {
       id: uid(),
       status: input.status ?? 'pending',
       linkedTradeId: null,
+      linkedTradeDirection: null,
+      linkedTradeEntryTriggerOptionId: null,
       createdAt: now,
       updatedAt: now,
     };
@@ -617,11 +653,98 @@ export const journalSessionService = {
       const option = await db.journalOptions.get(patch.directionOptionId);
       if (!option || option.category !== 'direction') throw new Error('جهت انتخاب‌شده معتبر نیست.');
     }
-    await db.journalTriggerEvents.update(id, { ...patch, updatedAt: Date.now() });
+    const previousDirectionOption = event.directionOptionId
+      ? await db.journalOptions.get(event.directionOptionId)
+      : undefined;
+    const nextDirectionOption = 'directionOptionId' in patch && patch.directionOptionId
+      ? await db.journalOptions.get(patch.directionOptionId)
+      : undefined;
+    const now = Date.now();
+
+    await db.transaction('rw', [db.journalTriggerEvents, db.trades, db.journalTradeData], async () => {
+      const current = await db.journalTriggerEvents.get(id);
+      if (!current) throw new Error('رویداد تریگر پیدا نشد.');
+      if (current.linkedTradeId && patch.status && patch.status !== 'converted') {
+        throw new Error('تریگرِ پیوندخورده به معامله را نمی‌توان به وضعیت دیگری تغییر داد.');
+      }
+
+      const eventPatch: Partial<JournalTriggerEvent> = { ...patch, updatedAt: now };
+      if (current.linkedTradeId) {
+        const trade = await db.trades.get(current.linkedTradeId);
+        if (!trade) throw new Error('معاملهٔ پیوندخورده به تریگر پیدا نشد.');
+        const tradePatch: Partial<Trade> = {};
+
+        if ('analysisEventId' in patch) {
+          tradePatch.journalAnalysisEventId = patch.analysisEventId ?? null;
+        }
+
+        if ('directionOptionId' in patch) {
+          const previouslyAppliedDirection = current.linkedTradeDirection
+            ?? tradeDirectionFromOption(previousDirectionOption);
+          const nextDirection = tradeDirectionFromOption(nextDirectionOption);
+          if (previouslyAppliedDirection && trade.direction === previouslyAppliedDirection) {
+            if (nextDirection) {
+              tradePatch.direction = nextDirection;
+              eventPatch.linkedTradeDirection = nextDirection;
+            } else {
+              eventPatch.linkedTradeDirection = previouslyAppliedDirection;
+            }
+          } else {
+            // A difference means the user chose a trade direction independently.
+            eventPatch.linkedTradeDirection = null;
+          }
+        }
+
+        if ('triggerTypeOptionId' in patch) {
+          const previouslyAppliedOptionId = current.linkedTradeEntryTriggerOptionId
+            ?? current.triggerTypeOptionId;
+          const nextOptionId = patch.triggerTypeOptionId ?? null;
+          const tradeData = await db.journalTradeData.where('tradeId').equals(trade.id).first();
+          const selectedOptionIds = parseArray(tradeData?.entryTriggerOptionIds);
+          let nextOptionIds = selectedOptionIds;
+          let shouldWriteTradeData = false;
+          let linkedTradeEntryTriggerOptionId: string | null = null;
+
+          if (previouslyAppliedOptionId && selectedOptionIds.includes(previouslyAppliedOptionId)) {
+            nextOptionIds = selectedOptionIds.filter(optionId => optionId !== previouslyAppliedOptionId);
+            if (nextOptionId && !nextOptionIds.includes(nextOptionId)) nextOptionIds.push(nextOptionId);
+            shouldWriteTradeData = true;
+            linkedTradeEntryTriggerOptionId = nextOptionId && nextOptionIds.includes(nextOptionId)
+              ? nextOptionId
+              : null;
+          } else if (!previouslyAppliedOptionId && nextOptionId) {
+            nextOptionIds = selectedOptionIds.includes(nextOptionId)
+              ? selectedOptionIds
+              : [...selectedOptionIds, nextOptionId];
+            shouldWriteTradeData = true;
+            linkedTradeEntryTriggerOptionId = nextOptionId;
+          }
+
+          if (shouldWriteTradeData) {
+            const nextTradeData = tradeData
+              ? { ...tradeData, entryTriggerOptionIds: JSON.stringify(nextOptionIds), updatedAt: now }
+              : blankJournalTradeData(trade.id, current.sessionId, now);
+            if (!tradeData && nextOptionId) {
+              nextTradeData.entryTriggerOptionIds = JSON.stringify(nextOptionIds);
+            }
+            await db.journalTradeData.put(nextTradeData);
+          }
+          eventPatch.linkedTradeEntryTriggerOptionId = linkedTradeEntryTriggerOptionId;
+        }
+
+        if (Object.keys(tradePatch).length) await db.trades.update(trade.id, tradePatch);
+      }
+
+      await db.journalTriggerEvents.update(id, eventPatch);
+    });
   },
 
-  async linkTriggerToTrade(triggerId: string, tradeId: string): Promise<void> {
-    await db.transaction('rw', db.journalTriggerEvents, db.trades, async () => {
+  async linkTriggerToTrade(
+    triggerId: string,
+    tradeId: string,
+    options: { applyTriggerDirection?: boolean } = {},
+  ): Promise<void> {
+    await db.transaction('rw', [db.journalTriggerEvents, db.trades, db.journalTradeData, db.journalSessions, db.journalOptions], async () => {
       const [trigger, trade] = await Promise.all([
         db.journalTriggerEvents.get(triggerId),
         db.trades.get(tradeId),
@@ -630,14 +753,54 @@ export const journalSessionService = {
       if (!trigger.confirmed) throw new Error('برای ثبت معامله، تریگر باید تأیید شده باشد.');
       if (trigger.linkedTradeId && trigger.linkedTradeId !== trade.id) throw new Error('این تریگر قبلاً به معاملهٔ دیگری وصل شده است.');
       if (trade.journalSessionId && trade.journalSessionId !== trigger.sessionId) throw new Error('معامله به سشن دیگری تعلق دارد.');
-      await db.trades.update(trade.id, {
+      const session = await db.journalSessions.get(trigger.sessionId);
+      if (!session) throw new Error('سشن ژورنال برای اتصال معامله پیدا نشد.');
+
+      const [directionOption, tradeData] = await Promise.all([
+        trigger.directionOptionId ? db.journalOptions.get(trigger.directionOptionId) : Promise.resolve(undefined),
+        db.journalTradeData.where('tradeId').equals(trade.id).first(),
+      ]);
+      const triggerDirection = tradeDirectionFromOption(directionOption);
+      const tradePatch: Partial<Trade> = {
         journalSessionId: trigger.sessionId,
         journalTriggerEventId: trigger.id,
         journalAnalysisEventId: trigger.analysisEventId,
+        accountId: trade.accountId ?? session.accountId,
+        boxId: trade.boxId ?? session.tradingBoxId,
+        strategyId: trade.strategyId ?? session.strategyId,
+        symbol: trade.symbol || parseArray(session.symbols)[0] || '',
+      };
+      if (options.applyTriggerDirection && triggerDirection) {
+        tradePatch.direction = triggerDirection;
+      }
+      const linkedTradeDirection = options.applyTriggerDirection
+        ? triggerDirection
+        : (trade.direction === triggerDirection ? triggerDirection : null);
+
+      await db.trades.update(trade.id, {
+        ...tradePatch,
       });
+
+      let linkedTradeEntryTriggerOptionId: string | null = null;
+      if (trigger.triggerTypeOptionId) {
+        const entryTriggerOptionIds = parseArray(tradeData?.entryTriggerOptionIds);
+        if (!entryTriggerOptionIds.includes(trigger.triggerTypeOptionId)) {
+          entryTriggerOptionIds.push(trigger.triggerTypeOptionId);
+        }
+        const now = Date.now();
+        const nextTradeData = tradeData
+          ? { ...tradeData, entryTriggerOptionIds: JSON.stringify(entryTriggerOptionIds), updatedAt: now }
+          : blankJournalTradeData(trade.id, trigger.sessionId, now);
+        nextTradeData.entryTriggerOptionIds = JSON.stringify(entryTriggerOptionIds);
+        await db.journalTradeData.put(nextTradeData);
+        linkedTradeEntryTriggerOptionId = trigger.triggerTypeOptionId;
+      }
+
       await db.journalTriggerEvents.update(trigger.id, {
         linkedTradeId: trade.id,
         status: 'converted',
+        linkedTradeDirection,
+        linkedTradeEntryTriggerOptionId,
         updatedAt: Date.now(),
       });
     });

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArrowRight, FilePlus2, Save, Trash2 } from 'lucide-react';
 import { useRoute, useLocation } from 'wouter';
 import { toast } from 'sonner';
-import type { JournalMedia, JournalOption, JournalTradeData, StrategyVersion, Trade } from '../db/database';
+import type { JournalMedia, JournalOption, JournalTradeData, JournalTriggerEvent, StrategyVersion, Trade } from '../db/database';
 import { db } from '../db/database';
 import { journalSessionService, parseJournalArray } from '../services/journalSessionService';
 import { Button } from '../components/ui/button';
@@ -76,6 +76,7 @@ export default function JournalTradeReview() {
   const [, setLocation] = useLocation();
   const tradeId = params?.id ?? '';
   const [trade, setTrade] = useState<Trade | null>(null);
+  const [linkedTrigger, setLinkedTrigger] = useState<JournalTriggerEvent | null>(null);
   const [meta, setMeta] = useState<Omit<JournalTradeData, 'id' | 'createdAt' | 'updatedAt'> | null>(null);
   const [sessionTitle, setSessionTitle] = useState('');
   const [options, setOptions] = useState<JournalOption[]>([]);
@@ -96,16 +97,20 @@ export default function JournalTradeReview() {
         setLocation('/journal/trades');
         return;
       }
-      const [session, version, previous, allOptions, attachments] = await Promise.all([
+      const [session, version, previous, allOptions, attachments, currentTrigger] = await Promise.all([
         db.journalSessions.get(found.journalSessionId),
         db.strategyVersions.get((await db.journalSessions.get(found.journalSessionId))?.strategyVersionId ?? ''),
         db.journalTradeData.where('tradeId').equals(found.id).first(),
         journalSessionService.getOptions(undefined, true),
         db.journalMedia.where('tradeId').equals(found.id).sortBy('createdAt'),
+        found.journalTriggerEventId
+          ? db.journalTriggerEvents.get(found.journalTriggerEventId)
+          : Promise.resolve(undefined),
       ]);
       if (!session) throw new Error('سشن معاملاتی این معامله پیدا نشد.');
       const symbols = parseJournalArray(session.symbols);
       setTrade(found);
+      setLinkedTrigger(currentTrigger ?? null);
       setSessionTitle(`${symbols.join(', ') || found.symbol} · ${new Date(session.startTime).toLocaleDateString()}`);
       setOptions(allOptions);
       setMedia(attachments);
@@ -226,6 +231,8 @@ export default function JournalTradeReview() {
   const checklist = parseObject<ChecklistResults>(meta.checklistResults, {});
   const psychology = parseObject<Psychology>(meta.psychology, emptyPsychology());
   const selectedRules = parseJournalArray(meta.violatedRuleIds);
+  const linkedOptionLabel = (optionId: string | null | undefined, fallback: string) =>
+    options.find(option => option.id === optionId)?.label ?? fallback;
 
   const multiOptions = (
     category: string,
@@ -284,6 +291,21 @@ export default function JournalTradeReview() {
           <Save className="h-4 w-4" /> {saving ? 'در حال ذخیره…' : 'ذخیره مرور'}
         </Button>
       </header>
+
+      {linkedTrigger && (
+        <Card data-testid="card-linked-trigger-details">
+          <CardHeader><CardTitle className="text-base">جزئیات فعلی تریگر پیوندخورده</CardTitle></CardHeader>
+          <CardContent className="grid gap-3 sm:grid-cols-2">
+            <div><p className="text-xs text-muted-foreground">بازهٔ زمانی</p><p className="text-sm">{linkedOptionLabel(linkedTrigger.timeframeOptionId, 'بازهٔ حذف‌شده')}</p></div>
+            <div><p className="text-xs text-muted-foreground">نوع تریگر</p><p className="text-sm">{linkedOptionLabel(linkedTrigger.triggerTypeOptionId, 'ثبت‌نشده')}</p></div>
+            <div><p className="text-xs text-muted-foreground">جهت تریگر</p><p className="text-sm">{linkedOptionLabel(linkedTrigger.directionOptionId, 'ثبت‌نشده')}</p></div>
+            <div><p className="text-xs text-muted-foreground">وضعیت تأیید</p><p className="text-sm">{linkedTrigger.confirmed ? 'تأییدشده' : 'تأییدنشده'}</p></div>
+            {linkedTrigger.description && <div className="sm:col-span-2"><p className="text-xs text-muted-foreground">شرح تریگر</p><p className="whitespace-pre-wrap text-sm">{linkedTrigger.description}</p></div>}
+            {linkedTrigger.marketMovement && <div className="sm:col-span-2"><p className="text-xs text-muted-foreground">حرکت بازار</p><p className="whitespace-pre-wrap text-sm">{linkedTrigger.marketMovement}</p></div>}
+            {linkedTrigger.notes && <div className="sm:col-span-2"><p className="text-xs text-muted-foreground">یادداشت تریگر</p><p className="whitespace-pre-wrap text-sm">{linkedTrigger.notes}</p></div>}
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader><CardTitle className="text-base">ستاپ و ورود</CardTitle></CardHeader>

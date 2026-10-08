@@ -1025,6 +1025,10 @@ export interface JournalTriggerEvent {
   status: 'pending' | 'ignored' | 'invalid' | 'converted';
   notes: string;
   linkedTradeId: string | null;
+  /** Last direction copied from this trigger, used to avoid overwriting manual trade edits. */
+  linkedTradeDirection?: Trade['direction'] | null;
+  /** Last entry-trigger option copied from this event into JournalTradeData. */
+  linkedTradeEntryTriggerOptionId?: string | null;
   createdAt: number;
   updatedAt: number;
 }

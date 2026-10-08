@@ -459,7 +459,9 @@ export default function NewTrade() {
 
       if (journalTriggerId) {
         try {
-          await journalSessionService.linkTriggerToTrade(journalTriggerId, currentTrade.id);
+          await journalSessionService.linkTriggerToTrade(journalTriggerId, currentTrade.id, {
+            applyTriggerDirection: !requestedTradeId,
+          });
           currentTrade = await tradeService.getTradeById(currentTrade.id) ?? currentTrade;
         } catch (error) {
           toast.error(error instanceof Error ? error.message : 'پیوند تریگر به معامله انجام نشد.');

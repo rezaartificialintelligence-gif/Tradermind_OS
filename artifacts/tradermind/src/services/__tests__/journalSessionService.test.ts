@@ -5,7 +5,12 @@ import { db } from '../../db/database';
 import { accountService } from '../accountService';
 import { backupService } from '../backupService';
 import { journalSessionService } from '../journalSessionService';
-import { JOURNAL_ANALYSIS_FIELD_LABELS_STORAGE_KEY } from '../journalAnalysisFieldLabels';
+import {
+  getJournalAnalysisFieldLabels,
+  JOURNAL_ANALYSIS_FIELD_LABELS,
+  JOURNAL_ANALYSIS_FIELD_LABELS_STORAGE_KEY,
+  saveJournalAnalysisFieldLabels,
+} from '../journalAnalysisFieldLabels';
 import { strategyService } from '../strategyService';
 import { tradeService } from '../tradeService';
 import { tradingBoxService } from '../tradingBoxService';
@@ -309,12 +314,134 @@ describe('journalSessionService', () => {
     });
   });
 
+  it('syncs linked trigger direction and entry type without overwriting manual trade edits', async () => {
+    const { account, box, strategy, session } = await seedSession();
+    const [timeframe, firstTriggerType, manualTriggerType] = await Promise.all([
+      db.journalOptions.where('category').equals('timeframe').first(),
+      db.journalOptions.where('category').equals('entry_trigger').first(),
+      db.journalOptions.where('category').equals('entry_trigger').offset(1).first(),
+    ]);
+    const directionOptions = await db.journalOptions.where('category').equals('direction').toArray();
+    const bullish = directionOptions.find(option => option.label === 'صعودی');
+    const bearish = directionOptions.find(option => option.label === 'نزولی');
+    expect(timeframe && firstTriggerType && manualTriggerType && bullish && bearish).toBeTruthy();
+
+    const analysis = await journalSessionService.createAnalysisEvent({
+      sessionId: session.id,
+      timeframeOptionId: timeframe!.id,
+      analysisText: 'Before the trade',
+      marketContext: '',
+      directionOptionId: null,
+      marketStructureOptionId: null,
+      liquidityContextOptionIds: '[]',
+      expectedDirectionOptionId: null,
+      scenario: '',
+      triggerContext: '',
+      zones: '',
+      notes: '',
+      tags: '[]',
+      previousTradeId: null,
+      nextTradeId: null,
+    });
+    const trigger = await journalSessionService.createTriggerEvent({
+      sessionId: session.id,
+      timeframeOptionId: timeframe!.id,
+      analysisEventId: analysis.id,
+      triggerTypeOptionId: firstTriggerType!.id,
+      description: 'Initial trigger',
+      marketMovement: '',
+      directionOptionId: bearish!.id,
+      confirmed: true,
+      notes: '',
+    });
+    const trade = await tradeService.createTrade({
+      journalSessionId: session.id,
+      symbol: 'EURUSD',
+    });
+
+    await journalSessionService.linkTriggerToTrade(trigger.id, trade.id, { applyTriggerDirection: true });
+    expect(await db.trades.get(trade.id)).toMatchObject({
+      journalSessionId: session.id,
+      journalTriggerEventId: trigger.id,
+      journalAnalysisEventId: analysis.id,
+      accountId: account.id,
+      boxId: box.id,
+      strategyId: strategy.id,
+      direction: 'short',
+    });
+    expect(await db.journalTradeData.where('tradeId').equals(trade.id).first())
+      .toMatchObject({ entryTriggerOptionIds: JSON.stringify([firstTriggerType!.id]) });
+
+    const replacementTriggerType = await journalSessionService.createOption({
+      category: 'entry_trigger',
+      label: 'Replacement trigger',
+    });
+    await journalSessionService.updateTriggerEvent(trigger.id, {
+      analysisEventId: null,
+      triggerTypeOptionId: replacementTriggerType.id,
+      directionOptionId: bullish!.id,
+      description: 'Edited trigger',
+    });
+    expect(await db.trades.get(trade.id)).toMatchObject({
+      journalAnalysisEventId: null,
+      direction: 'long',
+    });
+    expect(await db.journalTradeData.where('tradeId').equals(trade.id).first())
+      .toMatchObject({ entryTriggerOptionIds: JSON.stringify([replacementTriggerType.id]) });
+
+    // The trader changes direction and removes the linked trigger from their review.
+    await tradeService.updateTrade(trade.id, { direction: 'short' });
+    await db.journalTradeData.where('tradeId').equals(trade.id).modify({
+      entryTriggerOptionIds: JSON.stringify([manualTriggerType!.id]),
+    });
+    const finalTriggerType = await journalSessionService.createOption({
+      category: 'entry_trigger',
+      label: 'Final trigger',
+    });
+    await journalSessionService.updateTriggerEvent(trigger.id, {
+      triggerTypeOptionId: finalTriggerType.id,
+      directionOptionId: bearish!.id,
+    });
+
+    expect(await db.trades.get(trade.id)).toMatchObject({ direction: 'short' });
+    expect(await db.journalTradeData.where('tradeId').equals(trade.id).first())
+      .toMatchObject({ entryTriggerOptionIds: JSON.stringify([manualTriggerType!.id]) });
+    expect(await db.journalTriggerEvents.get(trigger.id)).toMatchObject({
+      linkedTradeId: trade.id,
+      linkedTradeDirection: null,
+      linkedTradeEntryTriggerOptionId: null,
+    });
+  });
+
   it('includes customized analysis field labels in exported settings', () => {
     const previousValue = localStorage.getItem(JOURNAL_ANALYSIS_FIELD_LABELS_STORAGE_KEY);
     const customLabels = JSON.stringify({ analysisText: 'تحلیل سفارشی' });
     localStorage.setItem(JOURNAL_ANALYSIS_FIELD_LABELS_STORAGE_KEY, customLabels);
     try {
       expect(backupService.exportSettings()[JOURNAL_ANALYSIS_FIELD_LABELS_STORAGE_KEY]).toBe(customLabels);
+    } finally {
+      if (previousValue === null) localStorage.removeItem(JOURNAL_ANALYSIS_FIELD_LABELS_STORAGE_KEY);
+      else localStorage.setItem(JOURNAL_ANALYSIS_FIELD_LABELS_STORAGE_KEY, previousValue);
+    }
+  });
+
+  it('persists every custom analysis field label and returns defaults for empty values', () => {
+    const previousValue = localStorage.getItem(JOURNAL_ANALYSIS_FIELD_LABELS_STORAGE_KEY);
+    try {
+      const custom = {
+        ...JOURNAL_ANALYSIS_FIELD_LABELS,
+        analysisText: 'عنوان تحلیل اختصاصی',
+        liquidityContextOptionIds: 'فهرست نقدینگی اختصاصی',
+        nextTradeId: 'معاملهٔ پیگیری اختصاصی',
+      };
+      saveJournalAnalysisFieldLabels(custom);
+      expect(getJournalAnalysisFieldLabels()).toEqual(custom);
+
+      saveJournalAnalysisFieldLabels({ ...custom, marketContext: '   ' });
+      expect(getJournalAnalysisFieldLabels()).toMatchObject({
+        analysisText: 'عنوان تحلیل اختصاصی',
+        marketContext: JOURNAL_ANALYSIS_FIELD_LABELS.marketContext,
+      });
     } finally {
       if (previousValue === null) localStorage.removeItem(JOURNAL_ANALYSIS_FIELD_LABELS_STORAGE_KEY);
       else localStorage.setItem(JOURNAL_ANALYSIS_FIELD_LABELS_STORAGE_KEY, previousValue);

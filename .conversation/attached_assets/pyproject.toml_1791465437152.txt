@@ -1,0 +1,11 @@
+[project]
+name = "repl-nix-workspace"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.13"
+dependencies = [
+    "arabic-reshaper>=3.0.1",
+    "pymupdf>=1.28.0",
+    "python-bidi>=0.6.11",
+    "reportlab>=5.0.0",
+]

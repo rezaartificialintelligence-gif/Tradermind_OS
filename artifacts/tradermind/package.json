@@ -1,6 +1,6 @@
 {
   "name": "@workspace/tradermind",
-  "version": "0.0.0",
+  "version": "1.5.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,9 +8,16 @@
     "build": "vite build --config vite.config.ts",
     "serve": "vite preview --config vite.config.ts --host 0.0.0.0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --config vitest.config.ts"
+    "test": "vitest run --config vitest.config.ts",
+    "electron:build:vite": "vite build --config vite.electron.config.ts",
+    "electron:compile": "tsc --project tsconfig.electron.json && node -e \"require('fs').writeFileSync('electron/dist/package.json', JSON.stringify({type:'commonjs'}))\"",
+    "electron:build:win": "pnpm run electron:build:vite && pnpm run electron:compile && electron-builder --win --config electron-builder.json --publish never",
+    "android:build:vite": "vite build --config vite.capacitor.config.ts",
+    "android:sync": "pnpm run android:build:vite && cap sync android",
+    "android:build:debug": "pnpm run android:sync && cd android && ./gradlew assembleDebug"
   },
   "devDependencies": {
+    "@capacitor/cli": "^7.6.9",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
@@ -60,6 +67,8 @@
     "clsx": "catalog:",
     "cmdk": "^1.1.1",
     "date-fns": "^3.6.0",
+    "electron": "^39.8.10",
+    "electron-builder": "^26.15.3",
     "embla-carousel-react": "^8.6.0",
     "fake-indexeddb": "^6.2.5",
     "framer-motion": "catalog:",
@@ -86,6 +95,7 @@
     "zod": "catalog:"
   },
   "dependencies": {
+    "@capacitor/android": "^7.6.9",
     "@capacitor/app": "^7.1.2",
     "@capacitor/camera": "^7.0.5",
     "@capacitor/core": "^7.6.9",

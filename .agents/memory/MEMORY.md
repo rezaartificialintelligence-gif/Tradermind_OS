@@ -1,0 +1,1 @@
+- [Vitest JSX transform](vitest-jsx-transform.md) — component tests need the React plugin to transform app TSX with automatic JSX.

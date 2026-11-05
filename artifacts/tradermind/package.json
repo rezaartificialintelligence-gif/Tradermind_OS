@@ -1,6 +1,7 @@
 {
   "name": "@workspace/tradermind",
   "version": "2.0.0",
+  "packageManager": "pnpm@10.26.1",
   "private": true,
   "type": "module",
   "main": "desktop/main.cjs",

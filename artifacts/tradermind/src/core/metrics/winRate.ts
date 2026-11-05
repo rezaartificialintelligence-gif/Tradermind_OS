@@ -1,11 +1,10 @@
 /**
- * winRate.ts — محاسبات Win Rate
- * PART 5 / Prompt 3 — Core Metrics Service
+ * winRate.ts — نرخ برد (wrapper روی engine.ts؛ هیچ فرمول مستقلی در این فایل نیست)
  */
 
 import { Trade } from '../../db/database';
-import { isClosed, isWin, isLoss } from '../../lib/tradeHelpers';
 import { getTradingDateParts } from '../../lib/tradingTime';
+import { computeMetrics } from './engine';
 
 export interface WinRateResult {
   total: number;
@@ -18,19 +17,10 @@ export interface WinRateResult {
 
 /** محاسبه نرخ برد/باخت */
 export function computeWinRate(trades: Trade[]): WinRateResult {
-  const closed = trades.filter(isClosed);
-  const wins = closed.filter(isWin);
-  const losses = closed.filter(isLoss);
-  const breakeven = closed.filter(t => t.result === 'breakeven');
-
-  const total = closed.length;
+  const m = computeMetrics(trades);
   return {
-    total,
-    wins: wins.length,
-    losses: losses.length,
-    breakeven: breakeven.length,
-    winRate: total > 0 ? wins.length / total : null,
-    lossRate: total > 0 ? losses.length / total : null,
+    total: m.count, wins: m.winCount, losses: m.lossCount, breakeven: m.breakEvenCount,
+    winRate: m.winRate, lossRate: m.lossRate,
   };
 }
 
@@ -52,28 +42,17 @@ export function computeWinRateByDayOfWeek(trades: Trade[]): Array<{
   winRate: number | null;
 }> {
   const DAYS = ['یکشنبه', 'دوشنبه', 'سه‌شنبه', 'چهارشنبه', 'پنجشنبه', 'جمعه', 'شنبه'];
-  const closed = trades.filter(isClosed);
-
   return DAYS.map((dayName, day) => {
-    const dayTrades = closed.filter(t => getTradingDateParts(t.openedAt).dayOfWeek === day);
-    const wins = dayTrades.filter(isWin);
-    return {
-      day,
-      dayName,
-      total: dayTrades.length,
-      winRate: dayTrades.length > 0 ? wins.length / dayTrades.length : null,
-    };
+    const r = computeWinRate(trades.filter(t => getTradingDateParts(t.openedAt).dayOfWeek === day));
+    return { day, dayName, total: r.total, winRate: r.winRate };
   });
 }
 
-/** Win Rate در ۵ معامله اخیر (برای نمایش روند) */
+/** Win Rate در N معامله اخیر (برای نمایش روند) */
 export function computeRecentWinRate(trades: Trade[], last = 5): number | null {
-  const closed = trades
-    .filter(isClosed)
+  const recent = trades
+    .filter(t => t.status === 'closed')
     .sort((a, b) => b.openedAt - a.openedAt)
     .slice(0, last);
-
-  if (!closed.length) return null;
-  const wins = closed.filter(isWin);
-  return wins.length / closed.length;
+  return computeWinRate(recent).winRate;
 }

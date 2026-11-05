@@ -36,6 +36,10 @@ import {
   scanAllViolations,
 } from '../services/riskService';
 import type { RiskProfileData, RiskInsight } from '../services/riskService';
+import { VoiceTypingButton } from '../components/ui/VoiceTypingButton';
+import { useStartEquity } from '../hooks/useStartEquity';
+import { getTradingDateKey } from '../lib/tradingTime';
+import { useAccountAnalyticsScope } from '../contexts/AccountAnalyticsContext';
 
 // ─────────────────────────────────────────────────────────────────
 // Types
@@ -129,7 +133,8 @@ function ScoreBadge({ score, grade }: { score: number; grade: string }) {
 // ─────────────────────────────────────────────────────────────────
 export default function RiskManagement() {
   const [tab, setTab] = useState<TabId>('overview');
-  const [trades, setTrades] = useState<Trade[]>([]);
+  const [loadedTrades, setTrades] = useState<Trade[]>([]);
+  const { scopedTrades: trades } = useAccountAnalyticsScope(loadedTrades);
   const [profile, setProfile] = useState<RiskProfileData | null>(null);
   const [violations, setViolations] = useState<RiskViolation[]>([]);
   const [groups, setGroups] = useState<RiskGroup[]>([]);
@@ -171,27 +176,39 @@ export default function RiskManagement() {
   }, [trades, timeRange]);
 
   const closed = useMemo(() => filteredTrades.filter(t => t.status === 'closed'), [filteredTrades]);
+  const accountStartEquity = useStartEquity(trades, closed);
+  const accountScopedProfile = useMemo(
+    () => profile ? {
+      ...profile,
+      accountEquity: accountStartEquity,
+      accountBalance: accountStartEquity,
+    } : null,
+    [profile, accountStartEquity],
+  );
 
   // Memoized analytics
   const consistency = useMemo(() => getRiskConsistency(filteredTrades), [filteredTrades]);
-  const qualityScore = useMemo(() => getRiskQualityScore(filteredTrades, profile), [filteredTrades, profile]);
-  const dailyExposures = useMemo(() => getAllDailyExposures(filteredTrades, profile), [filteredTrades, profile]);
-  const weeklyExposures = useMemo(() => getWeeklyRiskExposures(filteredTrades, profile), [filteredTrades, profile]);
+  const qualityScore = useMemo(() => getRiskQualityScore(filteredTrades, accountScopedProfile), [filteredTrades, accountScopedProfile]);
+  const dailyExposures = useMemo(() => getAllDailyExposures(filteredTrades, accountScopedProfile), [filteredTrades, accountScopedProfile]);
+  const weeklyExposures = useMemo(() => getWeeklyRiskExposures(filteredTrades, accountScopedProfile), [filteredTrades, accountScopedProfile]);
   const postLoss = useMemo(() => getPostLossBehavior(filteredTrades), [filteredTrades]);
   const postWin = useMemo(() => getPostWinBehavior(filteredTrades), [filteredTrades]);
-  const byDay = useMemo(() => getRiskByDayOfWeek(filteredTrades, profile), [filteredTrades, profile]);
-  const bySession = useMemo(() => getRiskBySession(filteredTrades, profile), [filteredTrades, profile]);
-  const drawdown = useMemo(() => getDrawdownAnalysis(closed, profile?.accountEquity ?? profile?.accountBalance ?? 10000), [closed, profile]);
+  const byDay = useMemo(() => getRiskByDayOfWeek(filteredTrades, accountScopedProfile), [filteredTrades, accountScopedProfile]);
+  const bySession = useMemo(() => getRiskBySession(filteredTrades, accountScopedProfile), [filteredTrades, accountScopedProfile]);
+  const drawdown = useMemo(
+    () => getDrawdownAnalysis(closed, accountStartEquity),
+    [closed, accountStartEquity],
+  );
   const rrAnalysis = useMemo(() => getRRAnalysis(filteredTrades), [filteredTrades]);
   const slBehavior = useMemo(() => getSLBehavior(filteredTrades), [filteredTrades]);
   const tpBehavior = useMemo(() => getTPBehavior(filteredTrades), [filteredTrades]);
   const posSizeBehavior = useMemo(() => getPosSizeBehavior(filteredTrades), [filteredTrades]);
   const plannedVsActual = useMemo(() => getPlannedVsActual(filteredTrades), [filteredTrades]);
-  const insights = useMemo(() => getRiskInsights(filteredTrades, profile), [filteredTrades, profile]);
-  const heatmapBySymbol = useMemo(() => getRiskHeatmapBySymbol(filteredTrades, profile), [filteredTrades, profile]);
+  const insights = useMemo(() => getRiskInsights(filteredTrades, accountScopedProfile), [filteredTrades, accountScopedProfile]);
+  const heatmapBySymbol = useMemo(() => getRiskHeatmapBySymbol(filteredTrades, accountScopedProfile), [filteredTrades, accountScopedProfile]);
 
   // Today's exposure
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = getTradingDateKey(Date.now());
   const todayExposure = useMemo(() => dailyExposures.find(d => d.date === todayStr), [dailyExposures, todayStr]);
 
   const saveViolation = async (v: Partial<RiskViolation>) => {
@@ -212,8 +229,7 @@ export default function RiskManagement() {
     if (!profile) { toast.error('ابتدا پروفایل ریسک تنظیم کنید'); return; }
     setScanning(true);
     try {
-      const allTrades = await db.trades.toArray();
-      const found = scanAllViolations(allTrades, profile);
+      const found = scanAllViolations(trades, profile);
       const existing = await db.riskViolations.toArray();
       const existingKeys = new Set(existing.map(e => `${e.tradeId}_${e.ruleType}`));
       const newViolations = found.filter(f => !existingKeys.has(`${f.tradeId}_${f.ruleType}`));
@@ -441,8 +457,8 @@ export default function RiskManagement() {
               <CardContent>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                   {[
-                    { label: 'افت فعلی', value: pct(drawdown.currentDrawdownPct), bad: drawdown.currentDrawdownPct > 5 },
-                    { label: 'بیشترین افت', value: pct(drawdown.maxDrawdownPct), bad: drawdown.maxDrawdownPct > 10 },
+                    { label: 'افت فعلی', value: pct(drawdown.currentDrawdownPct), bad: (drawdown.currentDrawdownPct ?? 0) > 5 },
+                    { label: 'بیشترین افت', value: pct(drawdown.maxDrawdownPct), bad: (drawdown.maxDrawdownPct ?? 0) > 10 },
                     { label: 'ضررهای متوالی', value: String(drawdown.currentConsecutiveLosses), bad: drawdown.currentConsecutiveLosses >= (profile?.maxConsecutiveLosses ?? 999) },
                     { label: 'معاملات در افت', value: String(drawdown.tradesInMaxDD) },
                   ].map(m => (
@@ -879,8 +895,10 @@ export default function RiskManagement() {
                     <div className="h-20 flex items-end gap-px">
                       {drawdown.curve.slice(-30).map((pt, i) => (
                         <div key={i} className="flex-1 bg-destructive/40 rounded-t"
-                          style={{ height: `${Math.min(100, pt.drawdownPct * 5)}%` }}
-                          title={`${pt.date}: -${pt.drawdownPct.toFixed(1)}%`} />
+                          style={{ height: `${Math.min(100, (pt.drawdownPct ?? 0) * 5)}%` }}
+                          title={pt.drawdownPct === null
+                            ? `${pt.date}: درصد افت در دسترس نیست`
+                            : `${pt.date}: -${pt.drawdownPct.toFixed(1)}%`} />
                       ))}
                     </div>
                     <p className="text-xs text-muted-foreground text-center">آخرین ۳۰ معامله — ارتفاع = شدت افت</p>
@@ -1073,12 +1091,14 @@ export default function RiskManagement() {
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
                     <label className="text-xs text-muted-foreground mb-1 block">نام گروه *</label>
+                    <div className="flex h-5 justify-end"><VoiceTypingButton /></div>
                     <input value={newGroupName} onChange={e => setNewGroupName(e.target.value)}
                       placeholder="مثال: جفت‌ارزهای دلاری"
                       className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring" />
                   </div>
                   <div>
                     <label className="text-xs text-muted-foreground mb-1 block">نمادها (با کاما جدا کنید)</label>
+                    <div className="flex h-5 justify-end"><VoiceTypingButton /></div>
                     <input value={newGroupSymbols} onChange={e => setNewGroupSymbols(e.target.value)}
                       placeholder="EURUSD, GBPUSD, AUDUSD"
                       className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring" />
@@ -1221,12 +1241,14 @@ function ViolationEditForm({ violation, form, setForm, onSave, onCancel }: {
       </div>
       <div>
         <label className="text-xs text-muted-foreground mb-1 block">توضیح</label>
+        <div className="flex h-5 justify-end"><VoiceTypingButton /></div>
         <textarea value={form.explanation ?? ''} onChange={e => setForm({ ...form, explanation: e.target.value })}
           rows={2} placeholder="چرا این اتفاق افتاد؟"
           className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring resize-none" />
       </div>
       <div>
         <label className="text-xs text-muted-foreground mb-1 block">درس آموخته‌شده</label>
+        <div className="flex h-5 justify-end"><VoiceTypingButton /></div>
         <textarea value={form.lesson ?? ''} onChange={e => setForm({ ...form, lesson: e.target.value })}
           rows={2} placeholder="چه درسی گرفتید؟"
           className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring resize-none" />

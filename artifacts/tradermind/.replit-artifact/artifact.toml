@@ -1,7 +1,7 @@
 kind = "web"
 previewPath = "/"
-title = "TraderMind Trading Journal"
-description = "A private, offline-first trading journal for recording trades, reviewing execution, and analyzing performance."
+title = "TraderMind OS"
+description = "A local-first trading journal for capturing trades, reviewing setups, planning risk, and analyzing performance, with backup and restore tools."
 version = "1.0.0"
 id = "artifacts/tradermind"
 router = "path"
@@ -12,7 +12,7 @@ paths = [ "/" ]
 localPort = 23583
 
 [services.development]
-run = "pnpm --filter @workspace/tradermind run dev"
+run = "pnpm --filter @workspace/tradermind run serve"
 
 [services.production]
 build = [ "pnpm", "--filter", "@workspace/tradermind", "run", "build" ]

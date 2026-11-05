@@ -47,6 +47,7 @@ import { Progress } from '@/components/ui/progress';
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
 import { toast } from 'sonner';
 import { logger } from '@/lib/logger';
+import { useAccountAnalyticsScope } from '../contexts/AccountAnalyticsContext';
 
 import {
   UserCircle2, TrendingUp, TrendingDown, AlertTriangle, CheckCircle2, Info, XCircle,
@@ -982,7 +983,9 @@ function PrivacyTab({ corrections, onReload, profile }: { corrections: Record<st
 // ── Main Page Component ────────────────────────────────────────────────────
 
 export default function TraderProfile() {
-  const [trades, setTrades] = useState<Trade[] | null>(null);
+  const [loadedTrades, setTrades] = useState<Trade[] | null>(null);
+  const { scopedTrades } = useAccountAnalyticsScope(loadedTrades ?? []);
+  const trades = loadedTrades === null ? null : scopedTrades;
   const [strategies, setStrategies] = useState<Strategy[] | null>(null);
   const [corrections, setCorrections] = useState<Record<string, InsightCorrection>>({});
   const [snapshots, setSnapshots] = useState<ProfileSnapshot[]>([]);

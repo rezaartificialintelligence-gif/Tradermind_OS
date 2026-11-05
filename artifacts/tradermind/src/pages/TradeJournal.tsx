@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { getRouteQuery } from '../lib/routeQuery';
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Link, useLocation } from "wouter";
 import { Skeleton } from "../components/ui/skeleton";
@@ -6,7 +7,9 @@ import { tradeService } from "../services/tradeService";
 import { strategyService } from "../services/strategyService";
 import { accountService } from "../services/accountService";
 import { tradingBoxService } from "../services/tradingBoxService";
-import { Trade, Strategy, Account, TradingBox } from "../db/database";
+import { Trade, Strategy, Account, TradingBox, JournalSession } from "../db/database";
+import { journalSessionService } from "../services/journalSessionService";
+import { SessionGroupedTrades } from "../components/journal/SessionGroupedTrades";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
@@ -42,6 +45,7 @@ function TradeListVirtualized({
   onSelectAll: () => void;
 }) {
   const tableRef = useRef<HTMLDivElement>(null);
+  const headerScrollRef = useRef<HTMLDivElement>(null);
   const mobileRef = useRef<HTMLDivElement>(null);
 
   const tableVirtualizer = useVirtualizer({
@@ -62,8 +66,20 @@ function TradeListVirtualized({
     <>
       {/* جدول — دسکتاپ */}
       <div className="hidden md:block rounded-xl border bg-card overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm whitespace-nowrap">
+        <div
+          ref={headerScrollRef}
+          className="overflow-x-auto"
+          onScroll={event => {
+            if (tableRef.current) tableRef.current.scrollLeft = event.currentTarget.scrollLeft;
+          }}
+        >
+          <table className="min-w-[1064px] w-full table-fixed text-sm whitespace-nowrap">
+            <colgroup>
+              <col style={{ width: 44 }} /><col style={{ width: 116 }} /><col style={{ width: 120 }} />
+              <col style={{ width: 88 }} /><col style={{ width: 100 }} /><col style={{ width: 100 }} />
+              <col style={{ width: 100 }} /><col style={{ width: 124 }} /><col style={{ width: 64 }} />
+              <col style={{ width: 96 }} /><col style={{ width: 112 }} />
+            </colgroup>
             <thead className="text-xs text-muted-foreground uppercase bg-muted/30 border-b sticky top-0 z-10">
               <tr>
                 <th className="px-3 py-3 w-10">
@@ -86,9 +102,22 @@ function TradeListVirtualized({
             </thead>
           </table>
         </div>
-        <div ref={tableRef} className="overflow-y-auto max-h-[600px]" style={{ overscrollBehavior: 'contain' }}>
+        <div
+          ref={tableRef}
+          className="overflow-x-auto overflow-y-auto max-h-[600px]"
+          style={{ overscrollBehavior: 'contain' }}
+          onScroll={event => {
+            if (headerScrollRef.current) headerScrollRef.current.scrollLeft = event.currentTarget.scrollLeft;
+          }}
+        >
           <div style={{ height: tableVirtualizer.getTotalSize(), position: 'relative' }}>
-            <table className="w-full text-sm whitespace-nowrap">
+            <table className="min-w-[1064px] w-full table-fixed text-sm whitespace-nowrap">
+              <colgroup>
+                <col style={{ width: 44 }} /><col style={{ width: 116 }} /><col style={{ width: 120 }} />
+                <col style={{ width: 88 }} /><col style={{ width: 100 }} /><col style={{ width: 100 }} />
+                <col style={{ width: 100 }} /><col style={{ width: 124 }} /><col style={{ width: 64 }} />
+                <col style={{ width: 96 }} /><col style={{ width: 112 }} />
+              </colgroup>
               <tbody>
                 {tableVirtualizer.getVirtualItems().map(vi => {
                   const trade = trades[vi.index];
@@ -273,12 +302,7 @@ type TradeJournalFilters = {
 
 function getRouteSearch(location: string): string {
   if (location.includes('?')) return location.slice(location.indexOf('?') + 1);
-  if (typeof window !== 'undefined' && window.location.protocol === 'file:') {
-    const hash = window.location.hash.replace(/^#/, '');
-    const queryIndex = hash.indexOf('?');
-    return queryIndex >= 0 ? hash.slice(queryIndex + 1) : '';
-  }
-  return typeof window !== 'undefined' ? window.location.search.replace(/^\?/, '') : '';
+  return getRouteQuery();
 }
 
 function buildTradeJournalPath(filters: TradeJournalFilters): string {
@@ -303,6 +327,7 @@ export default function TradeJournal() {
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [tradingBoxes, setTradingBoxes] = useState<TradingBox[]>([]);
+  const [journalSessions, setJournalSessions] = useState<JournalSession[]>([]);
   const [stats, setStats] = useState({ total: 0, winRate: 0, totalPnl: 0, avgRMultiple: 0 });
   const [loading, setLoading] = useState(true);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -332,6 +357,7 @@ export default function TradeJournal() {
     strategyService.getAllStrategies().then(setStrategies);
     accountService.getAll().then(setAccounts);
     tradingBoxService.getAll().then(setTradingBoxes);
+    journalSessionService.getSessions().then(setJournalSessions).catch(() => setJournalSessions([]));
     // اگر فیلتر URL وجود داشت، پنل فیلتر را باز کن
     if ([...urlParams.keys()].length > 0) setFiltersOpen(true);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -366,6 +392,14 @@ export default function TradeJournal() {
     setSelectedIds(prev => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const handleToggleMany = useCallback((ids: string[], select: boolean) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      for (const id of ids) { if (select) next.add(id); else next.delete(id); }
       return next;
     });
   }, []);
@@ -430,12 +464,12 @@ export default function TradeJournal() {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">دفتر معاملات</h1>
-          <p className="text-muted-foreground mt-1">معاملات خود را ثبت و بررسی کنید.</p>
+          <p className="text-muted-foreground mt-1">معاملات به‌صورت سشن نمایش داده می‌شوند؛ برای دیدن جزئیات، سشن را باز کنید.</p>
         </div>
-        {/* باگ ۱: ?new=true تضمین می‌کند که همیشه معامله جدید ساخته می‌شود */}
-        <Link href="/journal/trades/new?new=true">
-          <Button size="lg" className="gap-2 shadow-lg w-full sm:w-auto">
-            <PlusCircle className="h-5 w-5" /> ثبت معامله جدید
+        {/* ثبت معامله اکنون از داخل سشن و زیر تریگر انجام می‌شود */}
+        <Link href="/journal/sessions">
+          <Button size="lg" className="gap-2 shadow-lg w-full sm:w-auto" data-testid="button-go-to-sessions">
+            <PlusCircle className="h-5 w-5" /> ثبت معامله در سشن
           </Button>
         </Link>
       </div>
@@ -683,24 +717,24 @@ export default function TradeJournal() {
             <p className="text-muted-foreground max-w-sm">
               {activeFiltersCount > 0
                 ? 'فیلترها را تغییر دهید تا نتایج بیشتری ببینید.'
-                : 'اولین معامله خود را ثبت کنید.'}
+                : 'اولین سشن را بسازید و معامله را زیر تریگر ثبت کنید.'}
             </p>
             {activeFiltersCount > 0 ? (
               <Button variant="outline" onClick={clearFilters}>پاک کردن فیلترها</Button>
             ) : (
-              <Button onClick={() => setLocation('/journal/trades/new')}>
-                <PlusCircle className="w-4 h-4 ml-2" /> ثبت اولین معامله
+              <Button onClick={() => setLocation('/journal/sessions')}>
+                <PlusCircle className="w-4 h-4 ml-2" /> رفتن به سشن‌ها
               </Button>
             )}
           </CardContent>
         </Card>
       ) : (
-        <TradeListVirtualized
+        <SessionGroupedTrades
           trades={trades}
-          onSelect={id => setLocation(`/journal/trades/${id}?returnTo=${encodeURIComponent(buildTradeJournalPath(filters))}`)}
+          sessions={journalSessions}
           selectedIds={selectedIds}
-          onToggle={handleToggleSelect}
-          onSelectAll={handleSelectAll}
+          onToggleMany={handleToggleMany}
+          onOpenTrade={id => setLocation(`/journal/trades/${id}?returnTo=${encodeURIComponent(buildTradeJournalPath(filters))}`)}
         />
       )}
     </div>

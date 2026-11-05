@@ -5,10 +5,11 @@
  * All data stays local (IndexedDB). No external calls.
  */
 
-import { db, ChartScreenshot, ScreenshotGroup, VisualPattern, ScreenshotCollection, Trade } from '../db/database';
+import { db, ChartScreenshot, ScreenshotGroup, VisualPattern, ScreenshotCollection, Trade, JournalMedia, JournalSession } from '../db/database';
 import { median, isWin, isLoss, isClosed } from '../lib/tradeHelpers';
 import { getTradingDateParts } from '../lib/tradingTime';
 import { VisualFeature } from '../types/screenshot';
+import type { TradeScreenshot } from '../types/screenshot';
 import {
   PatternPerformanceStats,
   PatternBySession,
@@ -91,6 +92,151 @@ export async function deleteChartScreenshot(id: string): Promise<void> {
     }
   }
   await db.chartScreenshots.delete(id);
+}
+
+export async function saveTradeScreenshotToLibrary(
+  trade: Trade,
+  screenshot: TradeScreenshot,
+): Promise<ChartScreenshot | undefined> {
+  if (!screenshot.dataUrl?.startsWith('data:image/')) return undefined;
+  const existing = (await db.chartScreenshots.toArray())
+    .find(item => item.sourceTradeScreenshotId === screenshot.id);
+  if (existing) return existing;
+
+  const opened = new Date(trade.openedAt);
+  const typeMap: Record<string, string> = {
+    analysis: 'pre-trade',
+    entry: 'entry',
+    exit: 'exit',
+    'post-trade': 'post-trade',
+  };
+  return saveChartScreenshot({
+    symbol: trade.symbol || null,
+    timeframe: screenshot.timeframe || null,
+    date: `${opened.getFullYear()}-${String(opened.getMonth() + 1).padStart(2, '0')}-${String(opened.getDate()).padStart(2, '0')}`,
+    time: `${String(opened.getHours()).padStart(2, '0')}:${String(opened.getMinutes()).padStart(2, '0')}`,
+    timezone: trade.timezone ?? null,
+    session: trade.tradingSession ?? null,
+    direction: trade.direction || null,
+    setup: trade.setupType ?? null,
+    strategy: trade.strategyId ?? null,
+    tradeId: trade.id,
+    sourceTradeScreenshotId: screenshot.id,
+    screenshotType: typeMap[screenshot.type] ?? 'reference',
+    label: screenshot.label || 'اسکرین‌شات معامله',
+    notes: screenshot.analysisNotes || null,
+    dataUrl: screenshot.dataUrl,
+    imageBlob: null,
+    width: screenshot.width,
+    height: screenshot.height,
+    fileSize: screenshot.fileSize,
+    quality: screenshot.quality ? JSON.stringify(screenshot.quality) : null,
+    extractedFeatures: JSON.stringify(screenshot.extractedFeatures ?? []),
+    userAddedFeatures: JSON.stringify(screenshot.userAddedFeatures ?? []),
+    patternTags: '[]',
+    customTags: '[]',
+    annotations: JSON.stringify(screenshot.annotations ?? []),
+    analysisNotes: screenshot.analysisNotes ?? null,
+    groupId: null,
+    collectionIds: '[]',
+    linkedKnowledgeIds: '[]',
+  });
+}
+
+export async function saveJournalMediaScreenshot(
+  media: JournalMedia,
+  session?: JournalSession,
+): Promise<ChartScreenshot | undefined> {
+  if (!media.mimeType.startsWith('image/')) return undefined;
+  const existing = (await db.chartScreenshots.toArray())
+    .find(item => item.sourceMediaId === media.id);
+  if (existing) return existing;
+  const created = new Date(media.createdAt);
+  let symbols: unknown = [];
+  try { symbols = session?.symbols ? JSON.parse(session.symbols) : []; } catch { symbols = []; }
+  const symbol = Array.isArray(symbols) ? symbols.find(value => typeof value === 'string') : null;
+  return saveChartScreenshot({
+    symbol: typeof symbol === 'string' ? symbol : null,
+    timeframe: null,
+    date: `${created.getFullYear()}-${String(created.getMonth() + 1).padStart(2, '0')}-${String(created.getDate()).padStart(2, '0')}`,
+    time: `${String(created.getHours()).padStart(2, '0')}:${String(created.getMinutes()).padStart(2, '0')}`,
+    timezone: null,
+    session: null,
+    direction: null,
+    setup: null,
+    strategy: session?.strategyId ?? null,
+    tradeId: media.tradeId ?? null,
+    sourceMediaId: media.id,
+    screenshotType: 'reference',
+    label: media.fileName || media.caption || 'تصویر سشن معاملاتی',
+    notes: media.caption || null,
+    dataUrl: '',
+    imageBlob: media.blob.slice(0, media.blob.size, media.mimeType),
+    width: null,
+    height: null,
+    fileSize: media.blob.size,
+    quality: null,
+    extractedFeatures: '[]',
+    userAddedFeatures: '[]',
+    patternTags: '[]',
+    customTags: '[]',
+    annotations: '[]',
+    analysisNotes: media.caption || null,
+    groupId: null,
+    collectionIds: '[]',
+    linkedKnowledgeIds: '[]',
+  });
+}
+
+export async function deleteScreenshotForMedia(mediaId: string): Promise<void> {
+  const screenshot = (await db.chartScreenshots.toArray())
+    .find(item => item.sourceMediaId === mediaId);
+  if (screenshot) await deleteChartScreenshot(screenshot.id);
+}
+
+/** Import legacy trade and session images into the independent library once per source record. */
+let screenshotBackfillPromise: Promise<{ trades: number; media: number }> | null = null;
+export async function backfillScreenshotLibrary(): Promise<{ trades: number; media: number }> {
+  if (screenshotBackfillPromise) return screenshotBackfillPromise;
+  screenshotBackfillPromise = backfillScreenshotLibraryOnce();
+  try {
+    return await screenshotBackfillPromise;
+  } finally {
+    screenshotBackfillPromise = null;
+  }
+}
+
+async function backfillScreenshotLibraryOnce(): Promise<{ trades: number; media: number }> {
+  const [trades, media, sessions, library] = await Promise.all([
+    db.trades.toArray(),
+    db.journalMedia.toArray(),
+    db.journalSessions.toArray(),
+    db.chartScreenshots.toArray(),
+  ]);
+  const knownTradeSources = new Set(library.map(item => item.sourceTradeScreenshotId).filter((id): id is string => Boolean(id)));
+  const knownMediaSources = new Set(library.map(item => item.sourceMediaId).filter((id): id is string => Boolean(id)));
+  let importedTrades = 0;
+  let importedMedia = 0;
+
+  for (const trade of trades) {
+    let attached: TradeScreenshot[] = [];
+    try { attached = JSON.parse(trade.screenshots || '[]') as TradeScreenshot[]; } catch { /* skip malformed legacy JSON */ }
+    for (const screenshot of attached) {
+      if (!screenshot.id || knownTradeSources.has(screenshot.id) || !screenshot.dataUrl?.startsWith('data:image/')) continue;
+      await saveTradeScreenshotToLibrary(trade, screenshot);
+      knownTradeSources.add(screenshot.id);
+      importedTrades += 1;
+    }
+  }
+
+  const sessionById = new Map(sessions.map(session => [session.id, session]));
+  for (const item of media) {
+    if (!item.mimeType.startsWith('image/') || knownMediaSources.has(item.id)) continue;
+    await saveJournalMediaScreenshot(item, item.sessionId ? sessionById.get(item.sessionId) : undefined);
+    knownMediaSources.add(item.id);
+    importedMedia += 1;
+  }
+  return { trades: importedTrades, media: importedMedia };
 }
 
 // ── ScreenshotGroup CRUD ──────────────────────────────────────────

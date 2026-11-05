@@ -32,6 +32,9 @@ import type {
 } from '../services/performanceService';
 import { getPostLossBehavior, getPostWinBehavior } from '../services/riskService';
 import { useAppStore } from '../store/useAppStore';
+import { useAccountAnalyticsScope } from '../contexts/AccountAnalyticsContext';
+import { VoiceTypingButton } from '../components/ui/VoiceTypingButton';
+import { useStartEquity } from '../hooks/useStartEquity';
 
 // ─────────────────────────────────────────────────────────────────
 // UI Helpers
@@ -155,7 +158,8 @@ export default function PerformanceDashboard() {
   const tradingTimeMode = useAppStore(s => s.tradingTimeMode);
   const brokerUtcOffsetMinutes = useAppStore(s => s.brokerUtcOffsetMinutes);
   const [tab, setTab] = useState<TabId>('overview');
-  const [trades, setTrades] = useState<Trade[]>([]);
+  const [loadedTrades, setTrades] = useState<Trade[]>([]);
+  const { scopedTrades: trades } = useAccountAnalyticsScope(loadedTrades);
   const [loading, setLoading] = useState(true);
   const [timeRange, setTimeRange] = useState<'all' | '3m' | '6m' | '1y'>('all');
   const [evGranularity, setEvGranularity] = useState<'week' | 'month'>('month');
@@ -191,7 +195,8 @@ export default function PerformanceDashboard() {
     return trades.filter(t => t.openedAt >= now - ms);
   }, [trades, timeRange, tradingTimeMode, brokerUtcOffsetMinutes]);
 
-  const profile = useMemo(() => getPerformanceProfile(filtered), [filtered]);
+  const startEquity = useStartEquity(trades, filtered);
+  const profile = useMemo(() => getPerformanceProfile(filtered, { startBalance: startEquity }), [filtered, startEquity]);
   const scorecard = useMemo(() => getScorecard(filtered), [filtered]);
   const processQ = useMemo(() => getProcessQuality(filtered), [filtered]);
   const byDay = useMemo(() => getByDay(filtered), [filtered, tradingTimeMode, brokerUtcOffsetMinutes]);
@@ -331,7 +336,7 @@ export default function PerformanceDashboard() {
                     <StatRow label="R میانگین برد" value={r(profile.avgWin)} color="text-green-500" />
                     <StatRow label="R میانگین ضرر" value={r(profile.avgLoss)} color="text-destructive" />
                     <StatRow label="ضریب سود" value={profile.profitFactor !== null ? profile.profitFactor.toFixed(2) : '—'} color={profile.profitFactor !== null && profile.profitFactor >= 1.5 ? 'text-green-500' : ''} />
-                    <StatRow label="بیشترین افت" value={profile.maxDrawdownPct !== null ? `-${profile.maxDrawdownPct.toFixed(1)}%` : '—'} color="text-destructive" />
+                    <StatRow label="بیشترین افت" value={profile.maxDrawdownPct !== null ? `-${profile.maxDrawdownPct.toFixed(1)}%` : profile.maxDrawdownAbs > 0 ? `-${profile.maxDrawdownAbs.toFixed(2)}` : '—'} color="text-destructive" />
                     <StatRow label="تکرار معامله" value={profile.tradeFrequency !== null ? `${profile.tradeFrequency.toFixed(1)}/هفته` : '—'} />
                     <StatRow label="میانگین نگهداری" value={profile.holdingTimeAvgMin !== null ? (profile.holdingTimeAvgMin < 60 ? `${profile.holdingTimeAvgMin.toFixed(0)}دقیقه` : `${(profile.holdingTimeAvgMin/60).toFixed(1)}ساعت`) : '—'} />
                     <StatRow label="نرخ ریویو" value={profile.reviewRate !== null ? `${(profile.reviewRate * 100).toFixed(0)}%` : '—'} />
@@ -967,6 +972,7 @@ export default function PerformanceDashboard() {
                     )}
                     <div>
                       <label className="text-xs text-muted-foreground mb-1 block">یادداشت شخصی برای این دوره</label>
+                      <div className="flex h-5 justify-end"><VoiceTypingButton /></div>
                       <textarea value={reviewNotes} onChange={e => setReviewNotes(e.target.value)} rows={3}
                         placeholder="درس‌ها، اهداف و مشاهدات این دوره..."
                         className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring resize-none" />

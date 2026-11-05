@@ -8,6 +8,11 @@ const COLOR_THEMES: Record<ColorTheme, string> = {
   emerald: '#10b981',
   amber: '#f59e0b',
   rose: '#f43f5e',
+  cyan: '#06b6d4',
+  orange: '#f97316',
+  pink: '#ec4899',
+  teal: '#14b8a6',
+  indigo: '#6366f1',
 };
 
 function hexToHsl(hex: string): string | null {
@@ -42,10 +47,12 @@ function getContrastForeground(hex: string): string {
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   // PART 8 / Prompt 3 — selector برای جلوگیری از re-render غیرضروری
-  const { theme, fontSize, colorTheme, textColor, language } = useAppStore(
+  const { theme, fontSize, colorTheme, textColor, language, glassEffects, softAnimations } = useAppStore(
     useShallow(s => ({
       theme: s.theme,
       fontSize: s.fontSize,
+      glassEffects: s.glassEffects,
+      softAnimations: s.softAnimations,
       colorTheme: s.colorTheme,
       textColor: s.textColor,
       language: s.language,
@@ -55,9 +62,12 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   // ── حالت نمایش (روشن / تاریک / سیستم)
   React.useEffect(() => {
     const root = window.document.documentElement;
-    const applyTheme = (resolved: 'light' | 'dark') => {
-      root.classList.remove('light', 'dark');
-      root.classList.add(resolved);
+    // «neon» یک واریانت تیره است: کلاس dark هم می‌گیرد تا همه‌ی استایل‌های dark: کار کنند.
+    const applyTheme = (resolved: 'light' | 'dark' | 'neon') => {
+      root.classList.remove('light', 'dark', 'neon');
+      root.classList.add(resolved === 'neon' ? 'dark' : resolved);
+      if (resolved === 'neon') root.classList.add('neon');
+      root.setAttribute('data-theme', resolved);
     };
     if (theme === 'system') {
       const mq = window.matchMedia('(prefers-color-scheme: dark)');
@@ -66,9 +76,16 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       mq.addEventListener('change', handler);
       return () => mq.removeEventListener('change', handler);
     }
-    applyTheme(theme as 'light' | 'dark');
+    applyTheme(theme as 'light' | 'dark' | 'neon');
     return undefined;
   }, [theme]);
+
+  // ── شفافیت شیشه‌ای و انیمیشن‌ها
+  React.useEffect(() => {
+    const root = window.document.documentElement;
+    root.classList.toggle('tm-no-glass', glassEffects === false);
+    root.classList.toggle('tm-no-motion', softAnimations === false);
+  }, [glassEffects, softAnimations]);
 
   // ── اندازه متن
   React.useEffect(() => {

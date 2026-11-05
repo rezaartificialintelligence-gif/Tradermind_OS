@@ -1,6 +1,6 @@
 /**
  * ثوابت نسخه‌بندی TraderMind
- * این فایل تنها منبع حقیقت برای شماره‌های نسخه است.
+ * نسخهٔ برنامه از package.json می‌آید؛ برای انتشار جدید فقط «version» همان فایل را تغییر دهید.
  *
  * APP_VERSION      — نسخه برنامه (Semantic Versioning: MAJOR.MINOR.PATCH)
  * DB_VERSION       — نسخه Schema پایگاه داده Dexie
@@ -12,7 +12,13 @@
  *  - BACKUP_FORMAT_VERSION: فقط با تغییر ساختار فایل پشتیبان افزایش پیدا می‌کند
  */
 
-export const APP_VERSION = '1.5.0';
+import { version as packageVersion } from '../../package.json';
+
+/**
+ * نسخهٔ برنامه از package.json خوانده می‌شود تا همان عددی باشد که برای ساخت APK/EXE
+ * استفاده می‌شود (پیش‌تر اینجا دستی «1.5.0» بود ولی package.json «2.0.0» بود).
+ */
+export const APP_VERSION: string = packageVersion;
 export const DB_VERSION = 25;
 export const BACKUP_FORMAT_VERSION = '3.2';
 /** نسخه Schema برای فایل‌های پشتیبان */

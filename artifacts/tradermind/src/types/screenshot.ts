@@ -66,7 +66,10 @@ export type AnnotationType =
   | 'support' | 'resistance' | 'liquidity'
   | 'fibonacci' | 'impulse-start' | 'impulse-end'
   | 'range-high' | 'range-low' | 'important-candle'
-  | 'zone' | 'arrow' | 'label';
+  | 'zone' | 'arrow' | 'label' | 'custom';
+
+/** شکل ترسیمی: marker فقط برای داده‌های قدیمی است */
+export type AnnotationShape = 'marker' | 'rect' | 'ellipse' | 'vline' | 'hline' | 'line';
 
 export interface AnnotationPoint {
   x: number; // 0-1 normalized
@@ -80,6 +83,12 @@ export interface ScreenshotAnnotation {
   points: AnnotationPoint[];
   color: string;
   createdAt: number;
+  /** شکل ترسیم؛ در داده‌های قدیمی وجود ندارد و از روی type حدس زده می‌شود */
+  shape?: AnnotationShape;
+  /** ضخامت خط (پیکسل نمایشی) */
+  strokeWidth?: number;
+  /** پر بودن مربع/دایره */
+  filled?: boolean;
 }
 
 // ── Image Quality ────────────────────────────────────────────────
@@ -110,6 +119,7 @@ export interface MTFRelationship {
 
 export interface TradeScreenshot {
   id: string;
+  libraryScreenshotId?: string;
   label: string;
   dataUrl: string; // original — NEVER overwrite
   type: ScreenshotType;
@@ -218,6 +228,16 @@ export const ANNOTATION_LABELS: Record<AnnotationType, string> = {
   'zone': 'ناحیه',
   'arrow': 'فلش',
   'label': 'برچسب',
+  'custom': 'دلخواه',
+};
+
+export const ANNOTATION_SHAPE_LABELS: Record<AnnotationShape, string> = {
+  marker: 'نقطه',
+  rect: 'مربع',
+  ellipse: 'دایره',
+  vline: 'خط عمودی',
+  hline: 'خط افقی',
+  line: 'خط زاویه‌دار',
 };
 
 export const TIMEFRAME_LABELS: Record<string, string> = {

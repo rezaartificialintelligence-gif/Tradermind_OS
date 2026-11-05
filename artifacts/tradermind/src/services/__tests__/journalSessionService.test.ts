@@ -6,6 +6,8 @@ import { accountService } from '../accountService';
 import { backupService } from '../backupService';
 import { journalSessionService } from '../journalSessionService';
 import {
+  getJournalAnalysisFieldLayouts,
+  saveJournalAnalysisFieldLayouts,
   getJournalAnalysisFieldLabels,
   JOURNAL_ANALYSIS_FIELD_LABELS,
   JOURNAL_ANALYSIS_FIELD_LABELS_STORAGE_KEY,
@@ -148,6 +150,19 @@ describe('journalSessionService', () => {
       createdAt: 1,
       updatedAt: 1,
     });
+    await previous.table('accounts').add({
+      id: 'legacy-default-account',
+      name: 'حساب اصلی',
+      broker: '',
+      currency: 'USD',
+      initialBalance: null,
+      currentBalance: null,
+      color: '#3b82f6',
+      isDefault: true,
+      notes: null,
+      createdAt: 2,
+      updatedAt: 2,
+    });
     await previous.table('trades').add({
       id: 'legacy-trade',
       sessionId: 'analysis-session-1',
@@ -169,6 +184,8 @@ describe('journalSessionService', () => {
       symbol: 'EURUSD',
     });
     expect(await db.accounts.get('legacy-account')).toMatchObject({ isArchived: false });
+    expect(await db.accounts.get('default:account')).toMatchObject({ name: 'حساب اصلی' });
+    expect(await db.accounts.get('legacy-default-account')).toBeUndefined();
     expect(await db.journalSessions.count()).toBe(0);
   });
 
@@ -273,6 +290,36 @@ describe('journalSessionService', () => {
     expect((await journalSessionService.getBundle(session.id))?.events).toContainEqual(event);
     await journalSessionService.deleteEvent(event.id);
     expect(await db.journalSessionEvents.count()).toBe(0);
+  });
+
+  it('stores scenario outcomes, links a trigger to several analyses, and seeds forward zones', async () => {
+    const { session } = await seedSession();
+    const timeframes = await db.journalOptions.where('category').equals('timeframe').toArray();
+    const outcome = await db.journalOptions.where('category').equals('scenario_outcome').first();
+    const zones = await db.journalOptions.where('category').equals('forward_zone').toArray();
+    expect(zones.length).toBeGreaterThan(0);
+    const base = {
+      sessionId: session.id, directionOptionId: null, marketStructureOptionId: null, liquidityContextOptionIds: '[]',
+      expectedDirectionOptionId: null, zones: '', notes: '', tags: '[]',
+    };
+    const first = await journalSessionService.saveAnalysis({ ...base, timeframeOptionId: timeframes[0].id, scenarioOutcomeOptionId: outcome!.id, scenarioOutcomeNote: 'sweep happened', fieldSelections: JSON.stringify({ zones: [zones[0].id] }) });
+    const second = await journalSessionService.saveAnalysis({ ...base, timeframeOptionId: timeframes[1].id });
+    expect(second.createdAt).toBeGreaterThan(first.createdAt);
+    expect(await db.journalSessionAnalyses.get(first.id)).toMatchObject({ scenarioOutcomeOptionId: outcome!.id, scenarioOutcomeNote: 'sweep happened' });
+    await expect(journalSessionService.saveAnalysis({ ...base, timeframeOptionId: timeframes[0].id, scenarioOutcomeOptionId: timeframes[0].id }))
+      .rejects.toThrow();
+
+    const trigger = await journalSessionService.createTriggerEvent({
+      sessionId: session.id, timeframeOptionId: timeframes[0].id, analysisEventId: null, analysisEventIds: [first.id, second.id],
+      triggerTypeOptionId: null, description: 'multi', marketMovement: '', directionOptionId: null, status: 'pending', confirmed: false, notes: '', linkedTradeId: null,
+    } as Parameters<typeof journalSessionService.createTriggerEvent>[0]);
+    expect(trigger.analysisEventIds).toEqual([first.id, second.id]);
+    expect(trigger.analysisEventId).toBe(first.id);
+
+    await journalSessionService.deleteAnalysisEvent(first.id);
+    const updated = await db.journalTriggerEvents.get(trigger.id);
+    expect(updated?.analysisEventIds).toEqual([second.id]);
+    expect(updated?.analysisEventId).toBe(second.id);
   });
 
   it('updates trigger details while preserving its trade-session link', async () => {
@@ -422,6 +469,21 @@ describe('journalSessionService', () => {
     } finally {
       if (previousValue === null) localStorage.removeItem(JOURNAL_ANALYSIS_FIELD_LABELS_STORAGE_KEY);
       else localStorage.setItem(JOURNAL_ANALYSIS_FIELD_LABELS_STORAGE_KEY, previousValue);
+    }
+  });
+
+  it('treats frozen legacy default labels as not customized and clamps layout rows', () => {
+    const previousLabels = localStorage.getItem(JOURNAL_ANALYSIS_FIELD_LABELS_STORAGE_KEY);
+    try {
+      localStorage.setItem(JOURNAL_ANALYSIS_FIELD_LABELS_STORAGE_KEY, JSON.stringify({ analysisText: 'تحلیل بازار', notes: 'یادداشت من' }));
+      expect(getJournalAnalysisFieldLabels()).toMatchObject({ analysisText: 'مبدأ حرکت', notes: 'یادداشت من' });
+      const layouts = getJournalAnalysisFieldLayouts();
+      saveJournalAnalysisFieldLayouts({ ...layouts, scenario: { ...layouts.scenario, rows: 999, kind: 'checkbox' } });
+      expect(getJournalAnalysisFieldLayouts().scenario).toMatchObject({ rows: 30, kind: 'checkbox' });
+    } finally {
+      if (previousLabels === null) localStorage.removeItem(JOURNAL_ANALYSIS_FIELD_LABELS_STORAGE_KEY);
+      else localStorage.setItem(JOURNAL_ANALYSIS_FIELD_LABELS_STORAGE_KEY, previousLabels);
+      localStorage.removeItem('tradermind-journal-analysis-field-layout');
     }
   });
 

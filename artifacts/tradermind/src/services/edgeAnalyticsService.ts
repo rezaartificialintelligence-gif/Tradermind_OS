@@ -3,8 +3,9 @@
  * Pure functions, no UI or Dexie dependencies.
  */
 import { Trade } from '../db/database';
-import { isWin, isLoss, isClosed, median } from '../lib/tradeHelpers';
+import { isWin, isLoss, isClosed } from '../lib/tradeHelpers';
 import { getTradingDateKey, getTradingDateParts } from '../lib/tradingTime';
+import { computeMetrics, getR, mean } from '../core/metrics/engine';
 
 // ── Session Definitions ────────────────────────────────────────────────────
 
@@ -181,36 +182,25 @@ export const SHORT_DAYS    = ['ی','د','س','چ','پ','ج','ش'];
 export const PERSIAN_MONTHS = ['فروردین','اردیبهشت','خرداد','تیر','مرداد','شهریور','مهر','آبان','آذر','دی','بهمن','اسفند'];
 export const GREGORIAN_MONTHS = ['ژانویه','فوریه','مارس','آوریل','مه','ژوئن','ژوئیه','اوت','سپتامبر','اکتبر','نوامبر','دسامبر'];
 
-function sum(arr: number[]) { return arr.reduce((a, b) => a + b, 0); }
-
 function calcMetrics(trades: ClassifiedTrade[]): SliceMetrics {
-  const closed  = trades.filter(isClosed);
-  const wins    = closed.filter(isWin);
-  const losses  = closed.filter(isLoss);
-  const be      = closed.filter(t => t.result === 'breakeven');
-  const withR   = closed.filter(t => t.rMultiple != null);
-  const rValues = withR.map(t => t.rMultiple!);
-  const avgR    = withR.length ? sum(rValues) / withR.length : null;
-  const totalR  = withR.length ? sum(rValues) : null;
-  const winR    = wins.filter(t => t.rMultiple != null).map(t => t.rMultiple!);
-  const lossR   = losses.filter(t => t.rMultiple != null).map(t => Math.abs(t.rMultiple!));
-  const pf      = lossR.length && sum(lossR) !== 0 ? sum(winR) / sum(lossR) : null;
+  const m = computeMetrics(trades); // موتور واحد: core/metrics/engine.ts
+  const closed = trades.filter(isClosed);
   const holdsMin = trades.filter(t => t._holdingMinutes != null).map(t => t._holdingMinutes!);
   return {
     count:             trades.length,
     closedCount:       closed.length,
-    wins:              wins.length,
-    losses:            losses.length,
-    breakeven:         be.length,
-    winRate:           closed.length ? (wins.length / closed.length) * 100 : 0,
-    avgR,
-    medianR:           median(rValues),
-    totalR,
-    expectancy:        avgR,
-    profitFactor:      pf,
-    avgHoldingMinutes: holdsMin.length ? sum(holdsMin) / holdsMin.length : null,
-    bestR:             rValues.length ? Math.max(...rValues) : null,
-    worstR:            rValues.length ? Math.min(...rValues) : null,
+    wins:              m.winCount,
+    losses:            m.lossCount,
+    breakeven:         m.breakEvenCount,
+    winRate:           m.winRate === null ? 0 : m.winRate * 100,
+    avgR:              m.avgR,
+    medianR:           m.medianR,
+    totalR:            m.rCount ? m.totalR : null,
+    expectancy:        m.expectancyR,
+    profitFactor:      m.profitFactorR,
+    avgHoldingMinutes: mean(holdsMin),
+    bestR:             m.bestR,
+    worstR:            m.worstR,
     confidence:        getConfidence(closed.length),
   };
 }
@@ -686,7 +676,8 @@ export function computeEdgeAnalytics(
     }
     const day = calendarMap.get(dateStr)!;
     day.trades++;
-    if (t.rMultiple != null) day.totalR = (day.totalR ?? 0) + t.rMultiple;
+    const tradeR = getR(t);
+    if (tradeR !== null) day.totalR = (day.totalR ?? 0) + tradeR;
     if (isWin(t))  day.wins++;
     if (isLoss(t)) day.losses++;
     t._sessionIds.forEach(s => { if (!day.sessions.includes(s)) day.sessions.push(s); });
@@ -1030,7 +1021,7 @@ export function computeExtendedAnalytics(
     points: withMFEMAE
       .filter(t => t._mfe != null && t._mae != null)
       .slice(0, 100)
-      .map(t => ({ symbol: t.symbol, result: t.result, mfe: t._mfe!, mae: t._mae!, rMultiple: t.rMultiple })),
+      .map(t => ({ symbol: t.symbol, result: t.result, mfe: t._mfe!, mae: t._mae!, rMultiple: getR(t) })),
   };
 
   // ── Risk & Reward ──────────────────────────────────────────────────────────
@@ -1041,20 +1032,20 @@ export function computeExtendedAnalytics(
     return slDist > 0 ? tpDist / slDist : null;
   }
   const withPlanR   = classified.filter(t => plannedRR(t) != null);
-  const withActualR = classified.filter(t => t.rMultiple != null);
-  const both = classified.filter(t => plannedRR(t) != null && t.rMultiple != null);
+  const withActualR = classified.filter(t => getR(t) !== null);
+  const both = classified.filter(t => plannedRR(t) != null && getR(t) !== null);
   const riskReward: RiskRewardData = {
-    avgPlannedRR: withPlanR.length ? withPlanR.reduce((s,t) => s+(plannedRR(t)??0),0)/withPlanR.length : null,
-    avgActualRR:  withActualR.length ? withActualR.reduce((s,t) => s+(t.rMultiple??0),0)/withActualR.length : null,
+    avgPlannedRR: mean(withPlanR.map(plannedRR).filter((v): v is number => v !== null)),
+    avgActualRR:  mean(withActualR.map(getR).filter((v): v is number => v !== null)),
     avgRiskPct:   (() => {
       const w = classified.filter(t => t.riskPercentage != null);
-      return w.length ? w.reduce((s,t) => s+(t.riskPercentage!),0)/w.length : null;
+      return mean(w.map(t => t.riskPercentage!));
     })(),
     planVsActual: {
       total:         both.length,
-      plannedHigher: both.filter(t => (plannedRR(t)??0) > (t.rMultiple??0)).length,
-      actualHigher:  both.filter(t => (t.rMultiple??0) > (plannedRR(t)??0)).length,
-      equal:         both.filter(t => Math.abs((plannedRR(t)??0) - (t.rMultiple??0)) < 0.05).length,
+      plannedHigher: both.filter(t => (plannedRR(t) ?? 0) > (getR(t) ?? 0)).length,
+      actualHigher:  both.filter(t => (getR(t) ?? 0) > (plannedRR(t) ?? 0)).length,
+      equal:         both.filter(t => Math.abs((plannedRR(t) ?? 0) - (getR(t) ?? 0)) < 0.05).length,
     },
     rrBySession: DEFAULT_SESSIONS.filter(s => !s.isOverlap).map(s => {
       const ts = classified.filter(t => t._sessionIds.includes(s.id));
@@ -1149,7 +1140,8 @@ export function filterCalendarMonths(
     }
     const day = calendarMap.get(dateStr)!;
     day.trades++;
-    if (t.rMultiple != null) day.totalR = (day.totalR??0) + t.rMultiple;
+    const tradeR = getR(t);
+    if (tradeR !== null) day.totalR = (day.totalR ?? 0) + tradeR;
     if (isWin(t))  day.wins++;
     if (isLoss(t)) day.losses++;
     t._sessionIds.forEach(s => { if (!day.sessions.includes(s)) day.sessions.push(s); });

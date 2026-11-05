@@ -77,6 +77,32 @@ export function getTradingMonthKey(
   return `${p.year}-${String(p.month + 1).padStart(2, '0')}`;
 }
 
+/** کلید آغاز هفتهٔ ISO (دوشنبه) بر پایهٔ ساعت معاملاتی انتخاب‌شده. */
+export function getTradingWeekStartKey(
+  ts: number,
+  config: TradingTimeConfig = getTradingTimeConfig(),
+): string {
+  const p = partsFromTimestamp(ts, config);
+  const daysSinceMonday = p.dayOfWeek === 0 ? 6 : p.dayOfWeek - 1;
+  const monday = new Date(Date.UTC(p.year, p.month, p.day - daysSinceMonday));
+  return `${monday.getUTCFullYear()}-${String(monday.getUTCMonth() + 1).padStart(2, '0')}-${String(monday.getUTCDate()).padStart(2, '0')}`;
+}
+
+/** شمارهٔ هفتهٔ ISO و سال هفته؛ هفته‌های مرزی سال نیز درست محاسبه می‌شوند. */
+export function getTradingIsoWeekKey(
+  ts: number,
+  config: TradingTimeConfig = getTradingTimeConfig(),
+): string {
+  const p = partsFromTimestamp(ts, config);
+  const date = new Date(Date.UTC(p.year, p.month, p.day));
+  const isoDay = p.dayOfWeek === 0 ? 7 : p.dayOfWeek;
+  date.setUTCDate(date.getUTCDate() + 4 - isoDay);
+  const weekYear = date.getUTCFullYear();
+  const yearStart = Date.UTC(weekYear, 0, 1);
+  const weekNumber = Math.ceil(((date.getTime() - yearStart) / 86_400_000 + 1) / 7);
+  return `${weekYear}-W${String(weekNumber).padStart(2, '0')}`;
+}
+
 export function getTradingDayStart(
   ts = Date.now(),
   config: TradingTimeConfig = getTradingTimeConfig(),

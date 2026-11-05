@@ -7,6 +7,7 @@
 import { Trade } from '../db/database';
 import { InsightCard } from './analyticsService';
 import { isWin, isLoss, isClosed } from '../lib/tradeHelpers';
+import { winRateOf, avgROf, computeMetrics } from '../core/metrics/engine';
 
 // ================================================================
 // Types
@@ -214,27 +215,20 @@ export interface PTRSummary {
 // ================================================================
 
 function calcWinRate(trades: Trade[]): number {
-  const cl = trades.filter(isClosed);
-  if (cl.length === 0) return 0;
-  return (cl.filter(isWin).length / cl.length) * 100;
+  const r = winRateOf(trades); // موتور واحد
+  return r === null ? 0 : r * 100;
 }
 
 function calcAvgR(trades: Trade[]): number | null {
-  const withR = trades.filter(isClosed).filter(t => t.rMultiple != null);
-  if (withR.length === 0) return null;
-  return withR.reduce((s, t) => s + (t.rMultiple || 0), 0) / withR.length;
+  return avgROf(trades); // موتور واحد
 }
 
 function calcMedianR(trades: Trade[]): number | null {
-  const rs = trades.filter(isClosed).filter(t => t.rMultiple != null).map(t => t.rMultiple!);
-  if (rs.length === 0) return null;
-  const sorted = [...rs].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+  return computeMetrics(trades).medianR; // موتور واحد
 }
 
 function calcTotalPnl(trades: Trade[]): number {
-  return trades.reduce((s, t) => s + (t.profitLoss || 0), 0);
+  return computeMetrics(trades).netPnl; // موتور واحد (سود خالص؛ قبلاً ناخالص بود)
 }
 
 function parseTags(json: string): string[] {

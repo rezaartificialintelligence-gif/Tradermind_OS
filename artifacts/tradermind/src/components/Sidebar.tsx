@@ -37,7 +37,7 @@ import {
 import { cn } from "../lib/utils";
 import { DISPLAY_VERSION } from "../constants/version";
 import { Button } from "./ui/button";
-import { t } from "../lib/i18n";
+import { NAV_GROUPS, BOTTOM_ITEMS } from "../navigation/navConfig";
 
 
 interface NavItemProps {
@@ -147,250 +147,6 @@ export function Sidebar() {
 
 
 
-  const navGroups = [
-
-    {
-      title: t.nav.main,
-      items: [
-        {
-          href: "/",
-          icon: LayoutDashboard,
-          label: t.nav.dashboard,
-        },
-      ],
-    },
-
-
-    {
-      title: t.nav.trading,
-      items: [
-        {
-          href: "/strategies",
-          icon: GitMerge,
-          label: t.nav.strategies,
-        },
-        {
-          href: "/analysis",
-          icon: ActivitySquare,
-          label: t.nav.analysis,
-        },
-      ],
-    },
-
-
-
-    {
-      title: t.nav.journal,
-      items: [
-        {
-          href: "/journal/trades",
-          icon: Wallet,
-          label: t.nav.trades,
-        },
-        {
-          href: "/journal/sessions",
-          icon: CalendarDays,
-          label: "سشن‌های معاملاتی",
-        },
-        {
-          href: "/journal/analytics",
-          icon: BarChart3,
-          label: "تحلیل ژورنال",
-        },
-        {
-          href: "/journal/daily",
-          icon: BookOpen,
-          label: t.nav.dailyJournal,
-        },
-        {
-          href: "/journal/insights",
-          icon: Lightbulb,
-          label: "نکات معاملاتی",
-        },
-      ],
-    },
-
-
-
-    {
-      title: t.nav.insights,
-      items: [
-        {
-          href: "/knowledge",
-          icon: Brain,
-          label: "پایگاه دانش",
-        },
-        {
-          href: "/screenshots",
-          icon: Camera,
-          label: "هوش اسکرین‌شات",
-        },
-        {
-          href: "/replay",
-          icon: RotateCcw,
-          label: "ری‌پلی و شبیه‌سازی",
-        },
-        {
-          href: "/profile",
-          icon: UserCircle2,
-          label: "پروفایل من",
-        },
-        {
-          href: "/reports",
-          icon: BarChart3,
-          label: t.nav.reports,
-        },
-        {
-          href: "/analytics/edge",
-          icon: Zap,
-          label: "کشف مزیت",
-        },
-        {
-          href: "/symbols",
-          icon: TrendingUp,
-          label: "نمادها",
-        },
-      ],
-    },
-
-
-
-    {
-      title: "تحلیل عملکرد",
-      items: [
-        {
-          href: "/performance",
-          icon: BarChart3,
-          label: "داشبورد عملکرد",
-        },
-        {
-          href: "/analytics/advanced",
-          icon: Zap,
-          label: "تحلیل پیشرفته",
-        },
-        {
-          href: "/analytics/psychology",
-          icon: HeartPulse,
-          label: "روانشناسی معامله‌گر",
-        },
-      ],
-    },
-
-
-
-    {
-      title: "مدیریت ریسک",
-      items: [
-        {
-          href: "/risk/management",
-          icon: Shield,
-          label: "داشبورد ریسک",
-        },
-        {
-          href: "/risk/planner",
-          icon: Calculator,
-          label: "ماشین‌حساب ریسک",
-        },
-        {
-          href: "/risk/profile",
-          icon: ShieldCheck,
-          label: "پروفایل ریسک",
-        },
-      ],
-    },
-
-
-
-    {
-      title: "داده‌ها",
-      items: [
-        {
-          href: "/search",
-          icon: Search,
-          label: "جستجوی جهانی",
-        },
-        {
-          href: "/import",
-          icon: FileInput,
-          label: "وارد کردن داده",
-        },
-        {
-          href: "/data-quality",
-          icon: ShieldCheck,
-          label: "کیفیت داده",
-        },
-      ],
-    },
-
-
-
-    {
-      title: "مدیریت و پشتیبانی",
-      items: [
-        {
-          href: "/accounts",
-          icon: CreditCard,
-          label: "حساب‌های معاملاتی",
-        },
-        {
-          href: "/trading-boxes",
-          icon: Box,
-          label: "باکس‌های معاملاتی",
-        },
-        {
-          href: "/journal/config",
-          icon: SlidersHorizontal,
-          label: "پیکربندی ژورنال",
-        },
-        {
-          href: "/backup",
-          icon: HardDrive,
-          label: t.nav.backup,
-        },
-        {
-          href: "/settings",
-          icon: Settings,
-          label: t.nav.settings,
-        },
-        {
-          href: "/reminders",
-          icon: Bell,
-          label: "یادآورها",
-        },
-      ],
-    },
-
-  ];
-
-
-
-  const bottomItems = [
-    {
-      href: "/",
-      icon: LayoutDashboard,
-      label: t.nav.dashboard,
-    },
-    {
-      href: "/analysis",
-      icon: ActivitySquare,
-      label: "تحلیل",
-    },
-    {
-      href: "/journal/daily",
-      icon: BookOpen,
-      label: "ژورنال",
-    },
-    {
-      href: "/journal/trades",
-      icon: Wallet,
-      label: "معاملات",
-    },
-    {
-      href: "/reports",
-      icon: BarChart3,
-      label: "گزارش‌ها",
-    },
-  ];
   return (
     <>
       {/* ── پوشش موبایل وقتی Sidebar باز است */}
@@ -417,7 +173,7 @@ export function Sidebar() {
       {/* ── Sidebar دسکتاپ + Drawer موبایل */}
       <aside
         className={cn(
-          "tradermind-mobile-drawer fixed z-50 bg-sidebar border-l flex flex-col"
+          "tradermind-mobile-drawer md:hidden fixed z-50 bg-sidebar border-l flex flex-col"
         )}
         style={{
           // Keep the drawer inside the visual viewport on Android WebView.
@@ -508,7 +264,7 @@ export function Sidebar() {
           py-4
         ">
 
-          {navGroups.map((group, i) => (
+          {NAV_GROUPS.map((group, i) => (
 
             <div
               key={i}
@@ -597,9 +353,7 @@ export function Sidebar() {
           left-0
           right-0
           z-30
-          bg-background/95
-          backdrop-blur-sm
-          border-b
+          tm-bar border-b
           flex
           items-center
           px-4
@@ -622,6 +376,14 @@ export function Sidebar() {
 
 
 
+        <Link
+          href="/search"
+          aria-label="جست‌وجو"
+          className="tm-icon-btn h-10 w-10"
+        >
+          <Search className="h-5 w-5" />
+        </Link>
+
         <Button
           variant="ghost"
           size="icon"
@@ -629,6 +391,7 @@ export function Sidebar() {
             h-10
             w-10
           "
+          aria-label="منو"
           onClick={() =>
             setSidebarOpen(true)
           }
@@ -654,9 +417,7 @@ export function Sidebar() {
           left-0
           right-0
           z-30
-          bg-background/95
-          backdrop-blur-sm
-          border-t
+          tm-bar border-t
           flex
           items-stretch
         "
@@ -669,7 +430,7 @@ export function Sidebar() {
         }}
       >
 
-        {bottomItems.map((item, i) => (
+        {BOTTOM_ITEMS.map((item, i) => (
 
           <BottomNavItem
             key={i}

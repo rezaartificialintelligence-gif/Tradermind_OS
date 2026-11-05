@@ -23,6 +23,7 @@ import {
 import { isWin, isLoss, isClosed } from '../lib/tradeHelpers';
 import { getTradingDateParts } from '../lib/tradingTime';
 import { extractFeaturesFromText } from './visualAnalysisService';
+import { computeMetrics } from '../core/metrics/engine';
 
 // ── Re-export types for use in UI ─────────────────────────────────
 
@@ -358,17 +359,14 @@ function computeStats(trades: Trade[], label = ''): HistoricalStats | null {
   const closed = trades.filter(t => isClosed(t) && t.result !== 'open' && t.result !== 'cancelled');
   if (closed.length === 0) return null;
 
+  const m = computeMetrics(closed); // موتور واحد: core/metrics/engine.ts
+  const winRate = m.winRate === null ? 0 : Math.round(m.winRate * 100);
   const wins = closed.filter(isWin);
   const losses = closed.filter(isLoss);
-  const winRate = closed.length > 0 ? Math.round((wins.length / closed.length) * 100) : 0;
-
-  const rValues = closed.map(t => t.rMultiple).filter((r): r is number => r !== null);
-  const winRValues = wins.map(t => t.rMultiple).filter((r): r is number => r !== null);
-  const lossRValues = losses.map(t => t.rMultiple).filter((r): r is number => r !== null);
-
-  const avgR = rValues.length > 0 ? Math.round((rValues.reduce((a, b) => a + b, 0) / rValues.length) * 100) / 100 : null;
-  const avgWin = winRValues.length > 0 ? Math.round((winRValues.reduce((a, b) => a + b, 0) / winRValues.length) * 100) / 100 : null;
-  const avgLoss = lossRValues.length > 0 ? Math.round((lossRValues.reduce((a, b) => a + b, 0) / lossRValues.length) * 100) / 100 : null;
+  const r2 = (v: number | null) => (v === null ? null : Math.round(v * 100) / 100);
+  const avgR = r2(m.avgR);
+  const avgWin = r2(m.avgWinR);
+  const avgLoss = r2(m.avgLossR);
 
   // Behavioral patterns from postTradeReview
   const mistakeCounts: Record<string, number> = {};

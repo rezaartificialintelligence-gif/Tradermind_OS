@@ -1,1 +1,2 @@
 - [Vitest JSX transform](vitest-jsx-transform.md) — component tests need the React plugin to transform app TSX with automatic JSX.
+- [Stale artifact Vite processes](stale-artifact-vite-processes.md) — a failed workflow can leave its Vite child bound to the managed port; identify it before restarting.

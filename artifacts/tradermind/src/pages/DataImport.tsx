@@ -30,6 +30,7 @@ import { db, Trade } from "../db/database";
 import { TradeScreenshot, LifecyclePosition } from "../types/screenshot";
 import { tradeService } from "../services/tradeService";
 import StoredImage from "../components/StoredImage";
+import { VoiceTypingButton } from "../components/ui/VoiceTypingButton";
 
 // ─── Wizard steps ──────────────────────────────────────────────────────────────
 
@@ -499,10 +500,13 @@ export default function DataImport() {
                   <Tag className="w-3.5 h-3.5" /> تگ‌های مشترک (اختیاری)
                 </label>
                 <div className="flex gap-2">
-                  <input type="text" value={ssTagInput} onChange={e => setSsTagInput(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter' && ssTagInput.trim()) { setSsTags(prev => prev ? `${prev},${ssTagInput.trim()}` : ssTagInput.trim()); setSsTagInput(''); }}}
-                    placeholder="یک تگ بنویسید و Enter بزنید..."
-                    className="flex-1 h-8 rounded-md border border-input bg-background px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring" />
+                  <div className="min-w-0 flex-1 space-y-0.5">
+                    <div className="flex h-5 justify-end"><VoiceTypingButton /></div>
+                    <input type="text" value={ssTagInput} onChange={e => setSsTagInput(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter' && ssTagInput.trim()) { setSsTags(prev => prev ? `${prev},${ssTagInput.trim()}` : ssTagInput.trim()); setSsTagInput(''); }}}
+                      placeholder="یک تگ بنویسید و Enter بزنید..."
+                      className="h-8 w-full rounded-md border border-input bg-background px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring" />
+                  </div>
                 </div>
                 {ssTags && (
                   <div className="flex flex-wrap gap-1.5 mt-1">

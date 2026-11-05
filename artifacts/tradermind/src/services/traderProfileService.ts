@@ -4,7 +4,7 @@
  * Heavily leverages edgeAnalyticsService for base analytics.
  */
 import { Trade } from '../db/database';
-import { isWin, isLoss, isClosed, toDateStr } from '../lib/tradeHelpers';
+import { isClosed, toDateStr } from '../lib/tradeHelpers';
 import {
   computeEdgeAnalytics,
   computeExtendedAnalytics,
@@ -18,6 +18,7 @@ import {
   ExtendedAnalyticsResult,
   CONFIDENCE_FA,
 } from './edgeAnalyticsService';
+import { computeMetrics, winRateOf, avgROf } from '../core/metrics/engine';
 
 // ── Correction / Privacy Control ───────────────────────────────────────────
 
@@ -261,36 +262,16 @@ function parseSafe<T>(json: string | null | undefined, fb: T): T {
 }
 
 function avgR(ts: ClassifiedTrade[]): number | null {
-  const w = ts.filter(t => isClosed(t) && t.rMultiple != null);
-  if (!w.length) return null;
-  return w.reduce((s, t) => s + t.rMultiple!, 0) / w.length;
+  return avgROf(ts); // موتور واحد
 }
 
 function winRate(ts: ClassifiedTrade[]): number {
-  const c = ts.filter(isClosed);
-  return c.length ? (c.filter(isWin).length / c.length) * 100 : 0;
-}
-
-function pfactor(ts: ClassifiedTrade[]): number | null {
-  const c = ts.filter(isClosed);
-  const wr = c.filter(t => isWin(t) && t.rMultiple != null).map(t => t.rMultiple!);
-  const lr = c.filter(t => isLoss(t) && t.rMultiple != null).map(t => Math.abs(t.rMultiple!));
-  const sumL = lr.reduce((a, b) => a + b, 0);
-  if (!lr.length || sumL === 0) return null;
-  return wr.reduce((a, b) => a + b, 0) / sumL;
+  const r = winRateOf(ts); // موتور واحد
+  return r === null ? 0 : r * 100;
 }
 
 function maxDD(sorted: ClassifiedTrade[]): number | null {
-  const w = sorted.filter(t => isClosed(t) && t.rMultiple != null);
-  if (!w.length) return null;
-  let peak = 0, dd = 0, cum = 0;
-  for (const t of w) {
-    cum += t.rMultiple!;
-    if (cum > peak) peak = cum;
-    const d = peak - cum;
-    if (d > dd) dd = d;
-  }
-  return dd;
+  return computeMetrics(sorted).maxDrawdownR; // موتور واحد (افت از قله‌ی R تجمعی)
 }
 
 function avgAdherenceFn(ts: ClassifiedTrade[]): number | null {
@@ -594,17 +575,16 @@ function computePerformanceEvolution(
   const days180ago = now - 180 * 86400_000;
 
   function periodMetrics(ts: ClassifiedTrade[], label: string): PerformancePeriod {
-    const withR = ts.filter(t => t.rMultiple != null);
-    const totalR = withR.reduce((s, t) => s + t.rMultiple!, 0);
+    const metrics = computeMetrics(ts);
     return {
       label,
       count:        ts.length,
-      winRate:      winRate(ts),
-      avgR:         withR.length ? totalR / withR.length : null,
-      totalR:       withR.length ? totalR : null,
-      profitFactor: pfactor(ts),
+      winRate:      metrics.winRate === null ? 0 : metrics.winRate * 100,
+      avgR:         metrics.avgR,
+      totalR:       metrics.rCount ? metrics.totalR : null,
+      profitFactor: metrics.profitFactorR,
       avgAdherence: avgAdherenceFn(ts),
-      drawdown:     maxDD(ts),
+      drawdown:     metrics.maxDrawdownR,
     };
   }
 

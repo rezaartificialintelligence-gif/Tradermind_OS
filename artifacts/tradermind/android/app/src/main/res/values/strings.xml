@@ -1,7 +1,0 @@
-<?xml version='1.0' encoding='utf-8'?>
-<resources>
-    <string name="app_name">TraderMind OS</string>
-    <string name="title_activity_main">TraderMind OS</string>
-    <string name="package_name">app.tradermind.os</string>
-    <string name="custom_url_scheme">app.tradermind.os</string>
-</resources>

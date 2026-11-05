@@ -8,8 +8,10 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../co
 import { Button } from '../components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { toast } from 'sonner';
-import { db } from '../db/database';
+import { db, type Account } from '../db/database';
+import { accountService, riskPercentFromAmount } from '../services/accountService';
 import type { RiskProfileData, RiskUnit, SessionRule, SetupRule } from '../services/riskService';
+import { VoiceTypingButton } from '../components/ui/VoiceTypingButton';
 
 // ─────────────────────────────────────────────────────────────────
 // Helpers
@@ -84,6 +86,28 @@ export default function RiskProfile() {
   const [equity, setEquity] = useState('');
   const [currency, setCurrency] = useState('USD');
   const [riskUnit, setRiskUnit] = useState<RiskUnit>('percentage');
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [accountId, setAccountId] = useState('');
+  const [dollarRisk, setDollarRisk] = useState('');
+
+  useEffect(() => {
+    accountService.getActive().then(list => setAccounts(list)).catch(() => setAccounts([]));
+  }, []);
+
+  const selectAccount = async (id: string) => {
+    setAccountId(id);
+    const account = accounts.find(item => item.id === id);
+    if (!account) return;
+    const live = await accountService.getLiveBalance(id);
+    const current = live ?? account.currentBalance ?? account.initialBalance;
+    if (current != null) { setBalance(String(current)); setEquity(String(current)); }
+    setCurrency(account.currency);
+  };
+
+  const dollarRiskPct = riskPercentFromAmount(
+    dollarRisk.trim() === '' ? null : parseFloat(dollarRisk),
+    balance.trim() === '' ? null : parseFloat(balance),
+  );
 
   useEffect(() => {
     db.table('riskProfiles').get('default').then((p: RiskProfileData | undefined) => {
@@ -169,6 +193,24 @@ export default function RiskProfile() {
           <CardDescription>موجودی و واحد ریسک مورد استفاده</CardDescription>
         </CardHeader>
         <CardContent>
+          <FieldRow label="حساب" hint="با انتخاب حساب، موجودی از معاملات ثبت‌شده محاسبه می‌شود">
+            <Select value={accountId} onValueChange={v => void selectAccount(v)}>
+              <SelectTrigger className="w-44 h-9" data-testid="select-risk-account"><SelectValue placeholder="انتخاب حساب" /></SelectTrigger>
+              <SelectContent>
+                {accounts.map(account => (
+                  <SelectItem key={account.id} value={account.id}>{account.name}{account.accountNumber ? ` · ${account.accountNumber}` : ''}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FieldRow>
+          {(() => {
+            const account = accounts.find(item => item.id === accountId);
+            return account ? (
+              <p className="mb-2 text-xs text-muted-foreground" data-testid="text-risk-account-info">
+                موجودی اولیه: {account.initialBalance?.toLocaleString() ?? '—'} · موجودی فعلی: {account.currentBalance?.toLocaleString() ?? '—'}{account.accountNumber ? ` · شمارهٔ حساب: ${account.accountNumber}` : ''}
+              </p>
+            ) : null;
+          })()}
           <FieldRow label="موجودی حساب" hint="آخرین موجودی ثبت‌شده">
             <NumField value={balance} onChange={setBalance} suffix={currency} />
           </FieldRow>
@@ -207,6 +249,15 @@ export default function RiskProfile() {
         <CardContent>
           <FieldRow label="ریسک پیش‌فرض هر معامله" hint="مقدار معمول ریسک شما">
             <NumField value={defaultRisk} onChange={setDefaultRisk} placeholder="مثلاً 1" suffix="%" />
+          </FieldRow>
+          <FieldRow label="ریسک دلاری" hint="مبلغ را وارد کنید؛ درصد نسبت به موجودی حساب خودکار حساب می‌شود">
+            <div className="flex flex-wrap items-center gap-2">
+              <NumField value={dollarRisk} onChange={setDollarRisk} placeholder="مثلاً 50" suffix={currency} />
+              {dollarRiskPct !== null && <>
+                <span className="text-sm font-medium" data-testid="text-dollar-risk-pct">≈ {dollarRiskPct}٪</span>
+                <Button type="button" size="sm" variant="outline" onClick={() => setDefaultRisk(String(dollarRiskPct))} data-testid="button-apply-dollar-risk">اعمال به ریسک پیش‌فرض</Button>
+              </>}
+            </div>
           </FieldRow>
           <FieldRow label="حداکثر ریسک هر معامله" hint="بالاتر = نقض قانون">
             <NumField value={maxRisk} onChange={setMaxRisk} placeholder="مثلاً 2" suffix="%" />
@@ -289,10 +340,13 @@ export default function RiskProfile() {
           <CardContent className="space-y-3">
             {setupRules.map((r, i) => (
               <div key={i} className="flex items-center gap-3">
-                <input type="text" value={r.setup} onChange={e => {
-                  const u = [...setupRules]; u[i] = { ...u[i], setup: e.target.value }; setSetupRules(u);
-                }} placeholder="نام ستاپ (مثلاً OB)" dir="ltr"
-                  className="flex-1 h-9 rounded-lg border border-border bg-background px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring" />
+                <div className="min-w-0 flex-1 space-y-0.5">
+                  <div className="flex h-5 justify-end"><VoiceTypingButton /></div>
+                  <input type="text" value={r.setup} onChange={e => {
+                    const u = [...setupRules]; u[i] = { ...u[i], setup: e.target.value }; setSetupRules(u);
+                  }} placeholder="نام ستاپ (مثلاً OB)" dir="ltr"
+                    className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring" />
+                </div>
                 <input type="number" value={r.maxRiskPct} onChange={e => {
                   const u = [...setupRules]; u[i] = { ...u[i], maxRiskPct: parseFloat(e.target.value) }; setSetupRules(u);
                 }} className="w-20 h-9 rounded-lg border border-border bg-background px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring" />

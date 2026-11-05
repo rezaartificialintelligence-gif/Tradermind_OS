@@ -9,6 +9,7 @@ import {
   Star, AlertCircle, ArrowUpDown, GitCompare, Trophy
 } from 'lucide-react';
 import { db } from '../db/database';
+import { useAccountAnalyticsScope } from '../contexts/AccountAnalyticsContext';
 import { computeAllSymbolProfiles, rankSymbols, compareSymbols, SymbolBehaviorProfile } from '../services/symbolIntelligenceService';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -231,7 +232,8 @@ function SymbolCard({ profile, rank }: { profile: SymbolBehaviorProfile; rank: n
 type SortKey = 'composite' | 'winrate' | 'avgr' | 'trades';
 
 export default function SymbolsList() {
-  const [trades, setTrades] = useState<import('../db/database').Trade[]>([]);
+  const [loadedTrades, setTrades] = useState<import('../db/database').Trade[]>([]);
+  const { scopedTrades: trades } = useAccountAnalyticsScope(loadedTrades);
   useEffect(() => { db.trades.toArray().then(setTrades); }, []);
   const [sortKey, setSortKey] = useState<SortKey>('composite');
   const [filterClass, setFilterClass] = useState('all');
@@ -270,7 +272,7 @@ export default function SymbolsList() {
             <BarChart3 className="w-12 h-12 text-muted-foreground mx-auto mb-3 opacity-50" />
             <p className="text-muted-foreground">هنوز معامله‌ای ثبت نشده.</p>
             <p className="text-sm text-muted-foreground mt-1">با ثبت معاملات، پروفایل رفتاری هر نماد ساخته می‌شود.</p>
-            <Link href="/journal/trades/new">
+            <Link href="/journal/sessions">
               <Button className="mt-4">ثبت معامله</Button>
             </Link>
           </CardContent>

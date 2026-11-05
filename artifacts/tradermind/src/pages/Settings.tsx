@@ -20,7 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../components/ui/dialog";
 import { useLocation } from "wouter";
 import {
-  Moon, Sun, Monitor, Type, Palette, Globe, Activity, BookOpen, Clock,
+  Moon, Sun, Monitor, Sparkles, Type, Palette, Globe, Activity, BookOpen, Clock,
   LayoutDashboard, HardDrive, Info, Database, Trash2,
   Plus, X, Download, Upload, WifiOff, ShieldCheck, Lock, LockOpen,
   Bell, RefreshCw, Smile, KeyRound, Eye, EyeOff, CheckCircle2, AlertTriangle, SlidersHorizontal
@@ -29,6 +29,7 @@ import { toast } from "sonner";
 import { cn } from "../lib/utils";
 import { t } from "../lib/i18n";
 import { formatTradingOffset } from "../lib/tradingTime";
+import { SyncSection } from "../sync/SyncSettingsSection";
 
 // ─────────────────────────────────────────────
 // کامپوننت‌های کمکی
@@ -385,10 +386,11 @@ export default function Settings() {
   const store = useAppStore(
     useShallow(s => ({
        theme: s.theme, fontSize: s.fontSize, colorTheme: s.colorTheme, textColor: s.textColor,
+      glassEffects: s.glassEffects, softAnimations: s.softAnimations,
       analysisAutosave: s.analysisAutosave, analysisShowNextStep: s.analysisShowNextStep,
       analysisPhaseSummary: s.analysisPhaseSummary, analysisConfirmPhase: s.analysisConfirmPhase,
       analysisProgressBar: s.analysisProgressBar,
-      journalAutosave: s.journalAutosave,
+       journalAutosave: s.journalAutosave, tradeAutosave: s.tradeAutosave,
       journalCustomTags: s.journalCustomTags, journalCustomEmotions: s.journalCustomEmotions,
       dashShowTrades: s.dashShowTrades, dashShowWinRate: s.dashShowWinRate,
       dashShowPnl: s.dashShowPnl, dashShowAvgR: s.dashShowAvgR,
@@ -400,11 +402,12 @@ export default function Settings() {
       tradingTimeMode: s.tradingTimeMode, brokerUtcOffsetMinutes: s.brokerUtcOffsetMinutes,
       // setters
        setTheme: s.setTheme, setFontSize: s.setFontSize,
+      setGlassEffects: s.setGlassEffects, setSoftAnimations: s.setSoftAnimations,
        setColorTheme: s.setColorTheme, setTextColor: s.setTextColor,
       setAnalysisAutosave: s.setAnalysisAutosave, setAnalysisShowNextStep: s.setAnalysisShowNextStep,
       setAnalysisPhaseSummary: s.setAnalysisPhaseSummary, setAnalysisConfirmPhase: s.setAnalysisConfirmPhase,
       setAnalysisProgressBar: s.setAnalysisProgressBar,
-      setJournalAutosave: s.setJournalAutosave,
+       setJournalAutosave: s.setJournalAutosave, setTradeAutosave: s.setTradeAutosave,
       addJournalTag: s.addJournalTag, removeJournalTag: s.removeJournalTag,
       addJournalEmotion: s.addJournalEmotion, removeJournalEmotion: s.removeJournalEmotion,
       setDashShowTrades: s.setDashShowTrades, setDashShowWinRate: s.setDashShowWinRate,
@@ -488,10 +491,11 @@ export default function Settings() {
       <Section icon={Sun} title={t.settings.appearance} description={t.settings.appearanceDesc}>
         <div>
           <p className="text-sm font-medium mb-2">{t.settings.displayMode}</p>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             {[
               { value: 'light', label: t.settings.light, icon: Sun },
               { value: 'dark',  label: t.settings.dark,  icon: Moon },
+              { value: 'neon',  label: t.settings.neon,  icon: Sparkles },
               { value: 'system', label: t.settings.system, icon: Monitor },
             ].map(({ value, label, icon: Icon }) => (
               <button key={value} onClick={() => store.setTheme(value as any)}
@@ -530,6 +534,20 @@ export default function Settings() {
             ))}
           </div>
         </div>
+        <div className="divide-y divide-border/50 rounded-xl border border-border/60 px-3">
+          <SwitchRow
+            label="شفافیت شیشه‌ای"
+            description="افکت محوشدگی پنل‌ها؛ برای دستگاه‌های ضعیف‌تر خاموش کنید"
+            checked={store.glassEffects}
+            onChange={store.setGlassEffects}
+          />
+          <SwitchRow
+            label="انیمیشن‌های نرم"
+            description="حرکت و جابه‌جایی‌های کوتاه رابط کاربری"
+            checked={store.softAnimations}
+            onChange={store.setSoftAnimations}
+          />
+        </div>
         <div>
           <div className="flex items-center justify-between gap-3 mb-2">
             <div>
@@ -538,13 +556,18 @@ export default function Settings() {
             </div>
             <Palette className="w-4 h-4 text-primary shrink-0" />
           </div>
-          <div className="grid grid-cols-5 gap-2">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
             {[
               { value: 'blue', label: 'آبی', color: '#3b82f6' },
               { value: 'violet', label: 'بنفش', color: '#8b5cf6' },
               { value: 'emerald', label: 'سبز', color: '#10b981' },
               { value: 'amber', label: 'کهربایی', color: '#f59e0b' },
               { value: 'rose', label: 'رز', color: '#f43f5e' },
+              { value: 'cyan', label: 'فیروزه‌ای', color: '#06b6d4' },
+              { value: 'orange', label: 'نارنجی', color: '#f97316' },
+              { value: 'pink', label: 'صورتی', color: '#ec4899' },
+              { value: 'teal', label: 'سبزآبی', color: '#14b8a6' },
+              { value: 'indigo', label: 'نیلی', color: '#6366f1' },
             ].map(({ value, label, color }) => (
               <button
                 key={value}
@@ -573,7 +596,7 @@ export default function Settings() {
             <div className="flex items-center gap-2">
               <input
                 type="color"
-                value={store.textColor === 'auto' ? (store.theme === 'light' ? '#1a202c' : '#e2e8f0') : store.textColor}
+                value={store.textColor === 'auto' ? (store.theme === 'light' ? '#1a202c' : store.theme === 'neon' ? '#f1f7ff' : '#e2e8f0') : store.textColor}
                 onChange={e => store.setTextColor(e.target.value as `#${string}`)}
                 className="h-9 w-12 cursor-pointer rounded-md border border-border bg-transparent p-1"
                 aria-label="انتخاب رنگ متن"
@@ -596,6 +619,30 @@ export default function Settings() {
             <span className="h-3 w-3 rounded-full border border-border" style={{ backgroundColor: store.textColor === 'auto' ? 'hsl(var(--foreground))' : store.textColor }} />
             <span className="text-sm">نمونه متن اصلی</span>
             <span className="text-xs text-muted-foreground">متن کمکی برای بررسی کنتراست</span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 border-t border-border/60 pt-3" aria-label="رنگ‌های پیشنهادی متن">
+            {[
+              { label: 'ذغالی', value: '#111827' },
+              { label: 'خاکستری تیره', value: '#334155' },
+              { label: 'بنفش', value: '#7c3aed' },
+              { label: 'سبزآبی تیره', value: '#0f766e' },
+              { label: 'نارنجی تیره', value: '#c2410c' },
+              { label: 'سفید', value: '#f8fafc' },
+              { label: 'خاکستری روشن', value: '#cbd5e1' },
+              { label: 'کرم', value: '#fde68a' },
+              { label: 'سبز روشن', value: '#a7f3d0' },
+              { label: 'صورتی روشن', value: '#fbcfe8' },
+            ].map(color => (
+              <button
+                key={color.value}
+                type="button"
+                title={color.label}
+                aria-label={`رنگ متن ${color.label}`}
+                onClick={() => store.setTextColor(color.value as `#${string}`)}
+                className={cn('h-7 w-7 rounded-full border-2 transition-transform', store.textColor === color.value ? 'scale-110 border-primary' : 'border-border')}
+                style={{ backgroundColor: color.value }}
+              />
+            ))}
           </div>
         </div>
       </Section>
@@ -735,6 +782,22 @@ export default function Settings() {
         </p>
       </Section>
 
+      <Section icon={SlidersHorizontal} title="مدیریت حساب، باکس و ریسک" description="میانبرهای تنظیمات مرتبط با حساب‌ها و مدیریت سرمایه.">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          <Button variant="outline" onClick={() => navigate('/accounts')}>مدیریت حساب‌ها</Button>
+          <Button variant="outline" onClick={() => navigate('/trading-boxes')}>باکس‌های معاملاتی</Button>
+          <Button variant="outline" onClick={() => navigate('/risk/profile')}>پروفایل ریسک</Button>
+        </div>
+      </Section>
+
+      <Section icon={SlidersHorizontal} title="ذخیرهٔ خودکار معامله" description="وقتی خاموش باشد، تغییرات معامله فقط با «ذخیره و مشاهده» یا انتخاب ذخیره در پیام خروج ثبت می‌شوند. دکمهٔ انصراف، معاملهٔ جدید را دور می‌اندازد.">
+        <SwitchRow
+          label="ذخیرهٔ خودکار هنگام ویرایش معامله"
+          checked={store.tradeAutosave}
+          onChange={store.setTradeAutosave}
+        />
+      </Section>
+
       {/* ── ۵. تنظیمات تحلیل */}
       <Section icon={Activity} title={t.settings.analysis} description={t.settings.analysisDesc}>
         <SwitchRow label={t.settings.analysisAutosave} description={t.settings.analysisAutosaveDesc}
@@ -843,6 +906,8 @@ export default function Settings() {
       </Section>
 
       {/* ── ۹. پشتیبان‌گیری */}
+      <SyncSection />
+
       <Section icon={HardDrive} title={t.settings.backupSection} description={t.settings.backupDesc}>
         <div className="space-y-3 text-sm">
           <div className="flex justify-between">

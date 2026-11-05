@@ -5,9 +5,9 @@
  * Cache در حافظه (Map) نگه‌داری می‌شود و با هر تغییر در DB invalidate می‌شود.
  */
 
-import { Trade, DailyJournal, Strategy } from '../db/database';
 import { getAllTradesForAnalytics } from '../core/repositories/tradeRepository';
-import { isWin, isLoss, isClosed, getNetPnl } from '../lib/tradeHelpers';
+import { isClosed } from '../lib/tradeHelpers';
+import { computeMetrics, computeMetricsBy } from '../core/metrics/engine';
 import { getTradingDateKey } from '../lib/tradingTime';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -70,85 +70,34 @@ let _computePromise: Promise<CachedAnalytics> | null = null;
 async function computeAnalyticsCache(): Promise<CachedAnalytics> {
   const trades = await getAllTradesForAnalytics();
   const closed = trades.filter(isClosed);
-  const wins = closed.filter(isWin);
-  const losses = closed.filter(isLoss);
-  const n = closed.length;
+  // همه‌ی آمار از موتور واحد (core/metrics/engine.ts): سود خالص، طبقه‌بندی برد/باخت از علامت سود خالص
+  const m = computeMetrics(closed);
+  const n = m.count;
+  const { winRate, lossRate, profitFactor, expectancyR: expectancy, netPnl: totalPnl } = m;
+  const averageR = m.avgR;
 
-  // آمار پایه
-  const totalWinPnl = wins.reduce((s, t) => s + Math.max(0, t.profitLoss ?? 0), 0);
-  const totalLossPnl = Math.abs(losses.reduce((s, t) => s + Math.min(0, t.profitLoss ?? 0), 0));
-  const profitFactor = totalLossPnl > 0 ? totalWinPnl / totalLossPnl : null;
+  const dailyStats: DailyStats[] = computeMetricsBy(closed, t => getTradingDateKey(t.closedAt ?? t.openedAt))
+    .map(({ key, metrics: d }) => ({
+      date: key,
+      trades: d.count,
+      wins: d.winCount,
+      losses: d.lossCount,
+      winRate: d.winRate,
+      totalPnl: d.netPnl,
+      totalR: d.rCount ? d.totalR : null,
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date));
 
-  const Rs = closed.filter(t => t.rMultiple !== null).map(t => t.rMultiple!);
-  const winRs = wins.filter(t => t.rMultiple !== null).map(t => t.rMultiple!);
-  const lossRs = losses.filter(t => t.rMultiple !== null).map(t => t.rMultiple!);
-  const averageR = Rs.length ? Rs.reduce((s, v) => s + v, 0) / Rs.length : null;
+  const symbolStats: SymbolStats[] = computeMetricsBy(closed, t => t.symbol)
+    .map(({ key, metrics: s }) => ({
+      symbol: key, trades: s.count, wins: s.winCount, winRate: s.winRate, totalPnl: s.netPnl, avgR: s.avgR,
+    }))
+    .sort((a, b) => b.trades - a.trades);
 
-  const winRate = n > 0 ? wins.length / n : null;
-  const lossRate = n > 0 ? losses.length / n : null;
-  const avgWinR = winRs.length ? winRs.reduce((s, v) => s + v, 0) / winRs.length : null;
-  const avgLossR = lossRs.length ? lossRs.reduce((s, v) => s + v, 0) / lossRs.length : null;
-  const expectancy = winRate !== null && lossRate !== null && avgWinR !== null && avgLossR !== null
-    ? winRate * avgWinR + lossRate * avgLossR : null;
-  const totalPnl = closed.reduce((s, t) => s + (getNetPnl(t) ?? 0), 0);
-
-  // Daily stats
-  const byDay = new Map<string, { trades: Trade[] }>();
-  for (const t of closed) {
-    const date = getTradingDateKey(t.openedAt);
-    if (!byDay.has(date)) byDay.set(date, { trades: [] });
-    byDay.get(date)!.trades.push(t);
-  }
-  const dailyStats: DailyStats[] = [...byDay.entries()].map(([date, { trades: dt }]) => {
-    const dWins = dt.filter(isWin);
-    const dRs = dt.filter(t => t.rMultiple !== null).map(t => t.rMultiple!);
-    return {
-      date,
-      trades: dt.length,
-      wins: dWins.length,
-      losses: dt.filter(isLoss).length,
-      winRate: dt.length > 0 ? dWins.length / dt.length : null,
-      totalPnl: dt.reduce((s, t) => s + (getNetPnl(t) ?? 0), 0),
-      totalR: dRs.length ? dRs.reduce((s, v) => s + v, 0) : null,
-    };
-  }).sort((a, b) => a.date.localeCompare(b.date));
-
-  // Symbol stats
-  const bySymbol = new Map<string, Trade[]>();
-  for (const t of closed) {
-    if (!bySymbol.has(t.symbol)) bySymbol.set(t.symbol, []);
-    bySymbol.get(t.symbol)!.push(t);
-  }
-  const symbolStats: SymbolStats[] = [...bySymbol.entries()].map(([symbol, st]) => {
-    const sWins = st.filter(isWin);
-    const sRs = st.filter(t => t.rMultiple !== null).map(t => t.rMultiple!);
-    return {
-      symbol,
-      trades: st.length,
-      wins: sWins.length,
-      winRate: st.length > 0 ? sWins.length / st.length : null,
-      totalPnl: st.reduce((s, t) => s + (getNetPnl(t) ?? 0), 0),
-      avgR: sRs.length ? sRs.reduce((s, v) => s + v, 0) / sRs.length : null,
-    };
-  }).sort((a, b) => b.trades - a.trades);
-
-  // Session stats
-  const bySession = new Map<string, Trade[]>();
-  for (const t of closed) {
-    const session = t.tradingSession ?? 'unknown';
-    if (!bySession.has(session)) bySession.set(session, []);
-    bySession.get(session)!.push(t);
-  }
-  const sessionStats: SessionStats[] = [...bySession.entries()].map(([session, st]) => {
-    const sWins = st.filter(isWin);
-    return {
-      session,
-      trades: st.length,
-      wins: sWins.length,
-      winRate: st.length > 0 ? sWins.length / st.length : null,
-      totalPnl: st.reduce((s, t) => s + (getNetPnl(t) ?? 0), 0),
-    };
-  });
+  const sessionStats: SessionStats[] = computeMetricsBy(closed, t => t.tradingSession ?? 'unknown')
+    .map(({ key, metrics: s }) => ({
+      session: key, trades: s.count, wins: s.winCount, winRate: s.winRate, totalPnl: s.netPnl,
+    }));
 
   return {
     totalTrades: trades.length,

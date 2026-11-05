@@ -6,13 +6,31 @@ import { db, Trade, Strategy, Phase, Step, Rule, AnalysisSession, DailyJournal, 
 import { securityService } from '../security/securityService';
 import { APP_VERSION, DB_VERSION, BACKUP_FORMAT_VERSION, SCHEMA_VERSION } from '../constants/version';
 import { getNetPnl } from '../lib/tradeHelpers';
-import { JOURNAL_ANALYSIS_FIELD_LABELS_STORAGE_KEY } from './journalAnalysisFieldLabels';
+import { JOURNAL_ANALYSIS_FIELD_LABELS_STORAGE_KEY, JOURNAL_ANALYSIS_FIELD_LAYOUT_STORAGE_KEY } from './journalAnalysisFieldLabels';
+import { JOURNAL_SESSION_DEFAULTS_STORAGE_KEY } from './journalSessionDefaults';
+import { buildJournalWordReport, type JournalReportRange } from './journalWordReport';
+import { buildJournalExcelSheets } from './journalExcelReport';
+import { buildPeriodReviewWord } from './journalPeriodReviewLoader';
+import type { ReviewPeriodKind } from './journalPeriodReview';
 
 export { APP_VERSION, DB_VERSION, BACKUP_FORMAT_VERSION, SCHEMA_VERSION };
 
 const STORAGE_KEY_HISTORY = 'tradermind-backup-history';
 const STORAGE_KEY_APP = 'tradermind-app-storage';
 const STORAGE_KEY_LAST = 'tradermind-last-backup';
+const STORAGE_KEY_REMINDER_SOUND = 'tradermind-reminder-custom-sound';
+const BACKUP_LOCAL_STORAGE_KEYS = [
+  STORAGE_KEY_APP,
+  'tradermind-custom-symbols',
+  JOURNAL_ANALYSIS_FIELD_LABELS_STORAGE_KEY,
+  JOURNAL_ANALYSIS_FIELD_LAYOUT_STORAGE_KEY,
+  JOURNAL_SESSION_DEFAULTS_STORAGE_KEY,
+  'tradermind-reminders',
+  STORAGE_KEY_REMINDER_SOUND,
+  'rm_dismissed_insights',
+  'perf_dismissed_insights',
+  'perf_preferred_sessions',
+] as const;
 
 // ─────────────────────────────────────────────
 // انواع
@@ -77,6 +95,8 @@ export interface BackupData {
     journalTradeData?: unknown[];
     journalSessionEvents?: unknown[];
     journalMedia?: unknown[];
+    /** حذف‌های همگام‌سازی باید همراه داده‌ها منتقل شوند تا رکورد حذف‌شده برنگردد. */
+    syncTombstones?: unknown[];
   };
 }
 
@@ -173,7 +193,7 @@ function restoreJournalMedia(records: unknown[] | undefined): unknown[] {
   });
 }
 
-async function buildBackupData() {
+export async function buildBackupData() {
   const [
     strategies, phases, steps, rules, analysisSessions, trades, dailyJournals,
     symbolProfiles, learningAuditTrail, profileSnapshots, profileCorrections,
@@ -183,7 +203,7 @@ async function buildBackupData() {
     preTradeChecklists, dailyFocus, chartScreenshots, screenshotGroups,
     visualPatterns, screenshotCollections, accounts, tradingBoxes,
     journalSessions, journalOptions, journalSessionAnalyses, journalTriggerEvents, strategyVersions,
-    journalTradeData, journalSessionEvents, journalMedia,
+    journalTradeData, journalSessionEvents, journalMedia, syncTombstones,
   ] =
     await Promise.all([
       db.strategies.toArray(),
@@ -226,6 +246,7 @@ async function buildBackupData() {
       db.journalTradeData.toArray(),
       db.journalSessionEvents.toArray(),
       db.journalMedia.toArray(),
+      db.table('syncTombstones').toArray(),
     ]);
   const serializedChartScreenshots = await serializeChartScreenshots(chartScreenshots);
   const serializedJournalMedia = await serializeJournalMedia(journalMedia);
@@ -240,7 +261,7 @@ async function buildBackupData() {
     preTradeChecklists, dailyFocus, serializedChartScreenshots, screenshotGroups,
     visualPatterns, screenshotCollections, accounts, tradingBoxes,
     journalSessions, journalOptions, journalSessionAnalyses, journalTriggerEvents, strategyVersions,
-    journalTradeData, journalSessionEvents, serializedJournalMedia,
+    journalTradeData, journalSessionEvents, serializedJournalMedia, syncTombstones,
   ];
   const totalRecords = allRecords.reduce((sum, records) => sum + records.length, 0);
 
@@ -254,6 +275,7 @@ async function buildBackupData() {
     visualPatterns, screenshotCollections, accounts, tradingBoxes,
     journalSessions, journalOptions, journalSessionAnalyses, journalTriggerEvents, strategyVersions,
     journalTradeData, journalSessionEvents, journalMedia: serializedJournalMedia,
+    syncTombstones,
   };
 
   // محاسبه Checksum برای بررسی یکپارچگی
@@ -372,7 +394,12 @@ async function blobToBase64(blob: Blob): Promise<string> {
   return btoa(binary);
 }
 
-async function deliverFile(blob: Blob, filename: string): Promise<void> {
+async function deliverFile(
+  blob: Blob,
+  filename: string,
+  title = 'پشتیبان TraderMind',
+  options: { preferDownload?: boolean } = {},
+): Promise<void> {
   const isAndroidNative = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
   if (isAndroidNative) {
     const path = `TraderMind/Backups/${filename}`;
@@ -388,7 +415,7 @@ async function deliverFile(blob: Blob, filename: string): Promise<void> {
     // share sheet, the backup remains in Documents/TraderMind/Backups.
     try {
       await Share.share({
-        title: 'پشتیبان TraderMind',
+        title,
         text: `فایل در Documents/TraderMind/Backups ذخیره شد. در صورت نیاز آن را با Files یا Downloads به محل دیگری منتقل کنید.`,
         files: [uri],
         dialogTitle: 'ذخیره یا ارسال نسخه پشتیبان',
@@ -401,18 +428,26 @@ async function deliverFile(blob: Blob, filename: string): Promise<void> {
   }
 
   const file = new File([blob], filename, { type: blob.type || 'application/octet-stream' });
-  const canShareFile = typeof navigator !== 'undefined'
+  // برخی مرورگرها/پیش‌نمایش‌ها پنجرهٔ اشتراک‌گذاری را با خطا نشان می‌دهند؛ برای گزارش‌ها دانلود مستقیم مطمئن‌تر است.
+  const canShareFile = !options.preferDownload
+    && typeof navigator !== 'undefined'
     && typeof navigator.share === 'function'
     && typeof navigator.canShare === 'function'
     && navigator.canShare({ files: [file] });
 
   if (canShareFile) {
-    await navigator.share({
-      title: 'پشتیبان TraderMind',
-      text: `فایل ${filename} را در پوشه دلخواه ذخیره کنید.`,
-      files: [file],
-    });
-    return;
+    try {
+      await navigator.share({
+        title,
+        text: `فایل ${filename} را در پوشه دلخواه ذخیره کنید.`,
+        files: [file],
+      });
+      return;
+    } catch (cause) {
+      // انصراف کاربر خطا نیست. اما اگر مرورگر اشتراک‌گذاری را رد کرد (مثلاً چون بعد از
+      // ساخت طولانی فایل، اجازهٔ لمس کاربر منقضی شده)، به دانلود مستقیم برمی‌گردیم.
+      if (cause instanceof DOMException && cause.name === 'AbortError') return;
+    }
   }
 
   const url = URL.createObjectURL(blob);
@@ -637,6 +672,100 @@ ${imageEntries.map(image => `<Relationship Id="rId${image.index}" Type="http://s
   });
 }
 
+function wordXmlEscape(value: string): string {
+  return value
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function wordParagraph(text: string, options: { bold?: boolean; size?: number } = {}): string {
+  const safeText = wordXmlEscape(text || '—');
+  const formatting = `${options.bold ? '<w:b/>' : ''}${options.size ? `<w:sz w:val="${options.size}"/>` : ''}<w:rtl/>`;
+  return `<w:p><w:pPr><w:bidi/><w:jc w:val="right"/></w:pPr><w:r><w:rPr>${formatting}<w:lang w:val="fa-IR"/></w:rPr><w:t xml:space="preserve">${safeText}</w:t></w:r></w:p>`;
+}
+
+function wordValue(key: string, value: unknown): string {
+  if (value == null || value === '') return '—';
+  if (value instanceof Blob) return 'پیوست ذخیره‌شده؛ برای بازیابی از فایل پشتیبان کامل استفاده کنید.';
+  if (typeof value === 'string') {
+    if (value.startsWith('data:') || value.length > 2500) {
+      return `محتوای حجیم یا پیوست (${value.length.toLocaleString('fa-IR')} نویسه)؛ در گزارش متنی درج نشده است.`;
+    }
+    return value;
+  }
+  if (typeof value === 'object') {
+    const serialized = JSON.stringify(value);
+    if (serialized.length > 2500) return `محتوای حجیم (${serialized.length.toLocaleString('fa-IR')} نویسه)؛ در گزارش متنی درج نشده است.`;
+    return serialized;
+  }
+  return `${key}: ${String(value)}`;
+}
+
+async function buildWordReport(payload: BackupData): Promise<Blob> {
+  const paragraphs: string[] = [
+    wordParagraph('گزارش اطلاعات TraderMind', { bold: true, size: 36 }),
+    wordParagraph(`تاریخ تهیه: ${new Date(payload.metadata.createdAt).toLocaleString('fa-IR')}`),
+    wordParagraph(`نسخهٔ برنامه: ${payload.metadata.appVersion} | تعداد کل رکوردها: ${payload.metadata.totalRecords.toLocaleString('fa-IR')}`),
+    wordParagraph('این فایل گزارش خواندنی است و برای بازیابی کامل طراحی نشده؛ برای بازیابی در نسخهٔ وب، ویندوز یا اندروید از فایل .tradermind-backup.gz استفاده کنید.', { bold: true }),
+  ];
+
+  for (const [tableName, records] of Object.entries(payload.data)) {
+    if (!Array.isArray(records)) continue;
+    paragraphs.push(wordParagraph(`${tableName} — ${records.length.toLocaleString('fa-IR')} رکورد`, { bold: true, size: 28 }));
+    for (const [index, record] of records.entries()) {
+      paragraphs.push(wordParagraph(`رکورد ${index + 1}`, { bold: true }));
+      for (const [key, value] of Object.entries(record as Record<string, unknown>)) {
+        paragraphs.push(wordParagraph(`${key}: ${wordValue(key, value)}`));
+      }
+    }
+  }
+
+  paragraphs.push(wordParagraph('تنظیمات برنامه', { bold: true, size: 28 }));
+  for (const [key, value] of Object.entries(payload.data.settings ?? {})) {
+    if (key === STORAGE_KEY_REMINDER_SOUND) {
+      paragraphs.push(wordParagraph('صدای سفارشی یادآور: فایل صوتی همراه پشتیبان کامل ذخیره شده است.'));
+    } else {
+      paragraphs.push(wordParagraph(`${key}: ${wordValue(key, value)}`));
+    }
+  }
+
+  const zip = new JSZip();
+  zip.file('[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>`);
+  zip.file('_rels/.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`);
+  zip.file('word/document.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>${paragraphs.join('')}
+    <w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="900" w:right="900" w:bottom="900" w:left="900"/></w:sectPr>
+  </w:body>
+</w:document>`);
+  return zip.generateAsync({
+    type: 'blob',
+    mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    compression: 'DEFLATE',
+    compressionOptions: { level: 6 },
+  });
+}
+
+/** بخش نام حساب برای نام فایل گزارش؛ برای «همهٔ حساب‌ها» رشتهٔ خالی. */
+async function accountFileNamePart(accountId: string | null | undefined): Promise<string> {
+  if (!accountId) return '';
+  const account = await db.accounts.get(accountId);
+  const safe = (account?.name ?? '').replace(/[\\/:*?"<>|\s]+/g, '_').replace(/^_+|_+$/g, '');
+  return safe ? `_${safe}` : '';
+}
+
 // ─────────────────────────────────────────────
 // سرویس اصلی
 // ─────────────────────────────────────────────
@@ -662,6 +791,39 @@ export const backupService = {
       status: 'success',
       recordCount: totalRecords,
     });
+  },
+
+  async exportToWord(): Promise<void> {
+    const { data, metadata } = await buildBackupData();
+    const document = await buildWordReport({ data, metadata });
+    const date = new Date().toISOString().slice(0, 10);
+    await deliverFile(document, `TraderMind_Report_${date}.docx`, 'گزارش Word TraderMind');
+  },
+
+  /** گزارش Word ژورنال روزانه؛ تعداد سشن‌های واردشده در گزارش را برمی‌گرداند. */
+  async exportJournalWord(range: JournalReportRange = {}): Promise<number> {
+    const { blob, sessionCount } = await buildJournalWordReport(range);
+    const date = new Date().toISOString().slice(0, 10);
+    const accountPart = await accountFileNamePart(range.accountId);
+    await deliverFile(blob, `TraderMind_Journal${accountPart}_${date}.docx`, 'گزارش ژورنال TraderMind', { preferDownload: true });
+    return sessionCount;
+  },
+
+  /** گزارش Excel (بدون عکس) از معاملات، سشن‌ها، تحلیل‌ها و تریگرها؛ تعداد معاملات واردشده را برمی‌گرداند. */
+  async exportJournalExcel(range: JournalReportRange = {}): Promise<number> {
+    const { sheets, tradeCount } = await buildJournalExcelSheets(range);
+    const workbook = await buildSpreadsheetWorkbook(sheets, []);
+    const date = new Date().toISOString().slice(0, 10);
+    const accountPart = await accountFileNamePart(range.accountId);
+    await deliverFile(workbook, `TraderMind_Report${accountPart}_${date}.xlsx`, 'گزارش Excel TraderMind', { preferDownload: true });
+    return tradeCount;
+  },
+
+  /** مرور هفتگی/ماهانهٔ ژورنال به‌صورت فایل Word. */
+  async exportJournalPeriodReview(kind: ReviewPeriodKind, offset = 0): Promise<void> {
+    const blob = await buildPeriodReviewWord(kind, offset);
+    const date = new Date().toISOString().slice(0, 10);
+    await deliverFile(blob, `TraderMind_${kind === 'week' ? 'Weekly' : 'Monthly'}_Review_${date}.docx`, 'مرور ژورنال TraderMind', { preferDownload: true });
   },
 
   // ────────── Export رمزگذاری‌شده ──────────
@@ -756,12 +918,10 @@ export const backupService = {
   // ────────── تنظیمات ──────────
   exportSettings(): Record<string, string> {
     const settings: Record<string, string> = {};
-    const val = localStorage.getItem(STORAGE_KEY_APP);
-    if (val) settings[STORAGE_KEY_APP] = val;
-    const customSymbols = localStorage.getItem('tradermind-custom-symbols');
-    if (customSymbols) settings['tradermind-custom-symbols'] = customSymbols;
-    const analysisFieldLabels = localStorage.getItem(JOURNAL_ANALYSIS_FIELD_LABELS_STORAGE_KEY);
-    if (analysisFieldLabels) settings[JOURNAL_ANALYSIS_FIELD_LABELS_STORAGE_KEY] = analysisFieldLabels;
+    for (const key of BACKUP_LOCAL_STORAGE_KEYS) {
+      const value = localStorage.getItem(key);
+      if (value !== null) settings[key] = value;
+    }
     return settings;
   },
 
@@ -1006,6 +1166,7 @@ export const backupService = {
   async importReplace(data: BackupData['data']): Promise<void> {
     const restoredChartScreenshots = restoreChartScreenshots(data.chartScreenshots);
     const restoredJournalMedia = restoreJournalMedia(data.journalMedia);
+    // syncMeta is device-local (device ID and cursors); tombstones travel with portable backups.
     // همه جداول موجود در backup را در یک transaction restore می‌کنیم
     const tables = [
       db.strategies, db.phases, db.steps, db.rules,
@@ -1019,6 +1180,7 @@ export const backupService = {
       db.screenshotGroups, db.visualPatterns, db.screenshotCollections,
       db.journalSessions, db.journalOptions, db.journalSessionAnalyses, db.journalTriggerEvents,
       db.strategyVersions, db.journalTradeData, db.journalSessionEvents, db.journalMedia,
+      ...(Array.isArray(data.syncTombstones) ? [db.table('syncTombstones')] : []),
     ];
 
     await db.transaction('rw', tables, async () => {
@@ -1068,9 +1230,13 @@ export const backupService = {
       if (data.journalTradeData?.length) await db.journalTradeData.bulkAdd(data.journalTradeData as any[]);
       if (data.journalSessionEvents?.length) await db.journalSessionEvents.bulkAdd(data.journalSessionEvents as any[]);
       if (restoredJournalMedia.length) await db.journalMedia.bulkAdd(restoredJournalMedia as any[]);
+      if (Array.isArray(data.syncTombstones) && data.syncTombstones.length) {
+        await db.table('syncTombstones').bulkAdd(data.syncTombstones as any[]);
+      }
     });
 
     // Settings در localStorage ذخیره می‌شود — خارج از IndexedDB transaction (قابل قبول)
+    for (const key of BACKUP_LOCAL_STORAGE_KEYS) localStorage.removeItem(key);
     if (data.settings) this.importSettings(data.settings);
   },
 
@@ -1088,8 +1254,8 @@ export const backupService = {
           await table.add(item);
           stats.added++;
         } else {
-          const existingTime = existing.updatedAt ?? existing.createdAt ?? 0;
-          const backupTime = item.updatedAt ?? item.createdAt ?? 0;
+          const existingTime = existing.updatedAt ?? existing.deletedAt ?? existing.createdAt ?? 0;
+          const backupTime = item.updatedAt ?? item.deletedAt ?? item.createdAt ?? 0;
           if (backupTime > existingTime) {
             await table.put(item);
             stats.updated++;
@@ -1127,6 +1293,7 @@ export const backupService = {
       [db.strategyVersions, data.strategyVersions],
       [db.journalTradeData, data.journalTradeData], [db.journalSessionEvents, data.journalSessionEvents],
       [db.journalMedia, restoredJournalMedia],
+      [db.table('syncTombstones'), data.syncTombstones],
     ];
     for (const [table, items] of extendedTables) {
       if (items?.length) await mergeTable(table, items);
@@ -1148,12 +1315,12 @@ export const backupService = {
       db.screenshotGroups, db.visualPatterns, db.screenshotCollections,
       db.journalSessions, db.journalOptions, db.journalSessionAnalyses, db.journalTriggerEvents,
       db.strategyVersions, db.journalTradeData, db.journalSessionEvents, db.journalMedia,
+      db.table('syncTombstones'), db.table('syncMeta'),
     ];
     await db.transaction('rw', tables, async () => {
       await Promise.all(tables.map(table => table.clear()));
     });
-    localStorage.removeItem(STORAGE_KEY_APP);
-    localStorage.removeItem('tradermind-custom-symbols');
+    for (const key of BACKUP_LOCAL_STORAGE_KEYS) localStorage.removeItem(key);
   },
 
   // ────────── تاریخچه ──────────

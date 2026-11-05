@@ -8,8 +8,16 @@ import type { Trade } from '../../db/database';
 
 // ─── داده‌های تستی ────────────────────────────────────────────────────────────
 
+// P/L پیش‌فرض باید با result سازگار باشد (طبقه‌بندی برد/باخت از علامت سود خالص می‌آید)
+const DEFAULT_PNL_BY_RESULT: Partial<Record<Trade['result'], number>> = {
+  win: 100, 'partial-win': 50, loss: -50, 'partial-loss': -25, breakeven: 0,
+};
+
 function makeTrade(overrides: Partial<Trade> = {}): Trade {
-  return {
+  const derivedPnl = overrides.profitLoss === undefined && overrides.result !== undefined
+    ? DEFAULT_PNL_BY_RESULT[overrides.result]
+    : undefined;
+  const trade: Trade = {
     id: `t_${Math.random().toString(36).slice(2)}`,
     sessionId: null,
     strategyId: null,
@@ -66,6 +74,8 @@ function makeTrade(overrides: Partial<Trade> = {}): Trade {
     mtfAnalysis: null,
     ...overrides,
   };
+  if (derivedPnl !== undefined) trade.profitLoss = derivedPnl;
+  return trade;
 }
 
 // ─── تست‌های computeAnalytics ────────────────────────────────────────────────

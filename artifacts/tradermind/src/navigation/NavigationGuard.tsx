@@ -8,8 +8,8 @@ import { AlertTriangle, LogOut, Save, Trash2 } from 'lucide-react';
 
 export interface NavigationGuardRegistration {
   isDirty: boolean;
-  onSave?: () => Promise<void>;
-  onDiscard?: () => void;
+  onSave?: () => void | boolean | Promise<void | boolean>;
+  onDiscard?: () => void | boolean | Promise<void | boolean>;
 }
 
 interface NavigationGuardContextValue {
@@ -57,8 +57,16 @@ function getRouteFromHref(href: string): string {
   }
 }
 
+// ویندوز (Electron) و اندروید (Capacitor) هر دو از مسیریابی هش استفاده می‌کنند.
+// در این حالت، تغییر هش یک رویداد popstate می‌فرستد که برگشت واقعی نیست.
+function isHashRuntime(): boolean {
+  return window.location.protocol === 'file:'
+    || window.electronAPI?.isElectron === true
+    || Capacitor.isNativePlatform();
+}
+
 function navigateWithoutGuard(to: string): void {
-  if (window.location.protocol === 'file:') {
+  if (isHashRuntime()) {
     window.location.hash = to.startsWith('#') ? to : `#${to}`;
     return;
   }
@@ -69,7 +77,9 @@ export function NavigationGuardProvider({ children }: { children: React.ReactNod
   const [location] = useLocation();
   // Electron uses hash routing. Its internal hash navigation must never be
   // interpreted as browser Back navigation or as an app-exit request.
-  const isElectronRuntime = window.location.protocol === 'file:' || window.electronAPI?.isElectron === true;
+  // Android (Capacitor) نیز باید همین‌طور رفتار کند؛ برگشت واقعی در اندروید فقط از
+  // رویداد backButton می‌آید، نه از popstate.
+  const isElectronRuntime = isHashRuntime();
   const guardRef = useRef<NavigationGuardRegistration | null>(null);
   const currentLocationRef = useRef(location);
   const currentUrlRef = useRef(window.location.href);
@@ -111,7 +121,7 @@ export function NavigationGuardProvider({ children }: { children: React.ReactNod
   const restoreCurrentUrl = useCallback(() => {
     const current = window.location.href;
     window.history.pushState(null, '', currentUrlRef.current);
-    if (window.location.protocol === 'file:') {
+    if (isHashRuntime()) {
       window.dispatchEvent(new HashChangeEvent('hashchange', { oldURL: current, newURL: currentUrlRef.current }));
     }
   }, []);
@@ -238,8 +248,14 @@ export function NavigationGuardProvider({ children }: { children: React.ReactNod
     const guard = guardRef.current;
     setBusy(true);
     try {
-      if (choice === 'save') await guard?.onSave?.();
-      else guard?.onDiscard?.();
+      const result = choice === 'save'
+        ? await guard?.onSave?.()
+        : await guard?.onDiscard?.();
+      if (result === false) {
+        pendingRef.current = null;
+        setDialog(null);
+        return;
+      }
       pendingRef.current = null;
       setDialog(null);
       if (action?.type === 'back' && isDashboard(currentLocationRef.current)) {

@@ -211,6 +211,7 @@ export const fa = {
     displayMode: 'حالت نمایش',
     dark: 'تاریک',
     light: 'روشن',
+    neon: 'نئون ۳D',
     system: 'سیستم',
     fontSize: 'اندازه متن',
     fontSizeSm: 'کوچک',

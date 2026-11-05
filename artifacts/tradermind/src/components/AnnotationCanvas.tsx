@@ -1,24 +1,42 @@
 /**
- * AnnotationCanvas — Prompt 15, Section 12
- * ────────────────────────────────────────
- * Canvas overlay for annotating chart screenshots.
- * Annotations are stored as structured data; the original image is untouched.
+ * AnnotationCanvas — ابزار ترسیم روی اسکرین‌شات‌ها
+ * ─────────────────────────────────────────────────
+ * ابزارها: مربع، دایره، خط عمودی، خط افقی، خط زاویه‌دار (+ حالت انتخاب/ویرایش).
+ * «نقش» (نقطه ورود، حد ضرر، حد سود، حمایت، مقاومت، ...) فقط عنوان و رنگ پیش‌فرض شکل را تعیین می‌کند
+ * و روی هر شکلی قابل اعمال است. همه‌ی شکل‌ها بعد از رسم قابل جابه‌جایی، تغییر اندازه،
+ * تغییر عنوان/رنگ/ضخامت، کپی و حذف هستند. تصویر اصلی هرگز تغییر نمی‌کند.
  */
 
-import { useRef, useEffect, useState, useCallback, memo } from 'react';
+import { useRef, useEffect, useState, useCallback, useLayoutEffect, memo } from 'react';
 import {
   ScreenshotAnnotation,
   AnnotationType,
   AnnotationPoint,
   ANNOTATION_LABELS,
+  ANNOTATION_SHAPE_LABELS,
 } from '../types/screenshot';
-import { Button } from './ui/button';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import {
-  MapPin, Minus, Minus as MinusIcon, Square, Crosshair, X, RotateCcw, Eye, EyeOff
-} from 'lucide-react';
+  DrawableShape,
+  HandleId,
+  drawAnnotation,
+  dragHandle,
+  hitBody,
+  hitHandle,
+  isFilled,
+  isTooSmall,
+  pointsForShape,
+  resolveShape,
+  toHexColor,
+  translateAnnotation,
+  clamp01,
+} from '../lib/annotationGeometry';
+import { Button } from './ui/button';
+import { VoiceTypingButton } from './ui/VoiceTypingButton';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
+import { MousePointer2, Undo2, Trash2, Copy, X, RotateCcw, Eye, EyeOff } from 'lucide-react';
+import { cn } from '../lib/utils';
 
-const ANNOTATION_COLORS: Record<string, string> = {
+export const ANNOTATION_COLORS: Record<string, string> = {
   entry: '#22c55e',
   'stop-loss': '#ef4444',
   'take-profit': '#3b82f6',
@@ -31,10 +49,55 @@ const ANNOTATION_COLORS: Record<string, string> = {
   'range-high': '#f59e0b',
   'range-low': '#f59e0b',
   'important-candle': '#f97316',
-  zone: 'rgba(251,191,36,0.3)',
+  zone: '#fbbf24',
   arrow: '#94a3b8',
   label: '#e2e8f0',
+  custom: '#e2e8f0',
 };
+
+const defaultColor = (type: AnnotationType) => ANNOTATION_COLORS[type] ?? '#94a3b8';
+
+type Tool = 'select' | DrawableShape;
+
+/** آیکن‌های ساده‌ی ابزارها (هم‌سبک و بدون وابستگی) */
+function ShapeIcon({ shape }: { shape: DrawableShape }) {
+  const common = { fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round' as const };
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden>
+      {shape === 'rect' && <rect x="4" y="6" width="16" height="12" rx="1" {...common} />}
+      {shape === 'ellipse' && <ellipse cx="12" cy="12" rx="8" ry="6.5" {...common} />}
+      {shape === 'vline' && <line x1="12" y1="3" x2="12" y2="21" {...common} />}
+      {shape === 'hline' && <line x1="3" y1="12" x2="21" y2="12" {...common} />}
+      {shape === 'line' && <line x1="4" y1="19" x2="20" y2="5" {...common} />}
+    </svg>
+  );
+}
+
+const DRAW_TOOLS: DrawableShape[] = ['rect', 'ellipse', 'vline', 'hline', 'line'];
+
+const TOOL_HINT: Record<Tool, string> = {
+  select: 'روی شکل بزنید تا انتخاب شود؛ بکشید تا جابه‌جا شود؛ با دایره‌های سفید اندازه را تغییر دهید',
+  rect: 'بکشید تا مربع رسم شود',
+  ellipse: 'بکشید تا دایره رسم شود',
+  vline: 'لمس کنید تا خط عمودی قرار گیرد (می‌توانید همان‌جا بکشید)',
+  hline: 'لمس کنید تا خط افقی قرار گیرد (می‌توانید همان‌جا بکشید)',
+  line: 'از نقطه شروع تا پایان بکشید',
+};
+
+const STROKE_WIDTHS = [1, 2, 3, 5];
+
+type Gesture =
+  | { kind: 'draw'; shape: DrawableShape; start: AnnotationPoint }
+  | {
+      kind: 'move' | 'handle';
+      id: string;
+      handle?: HandleId;
+      last: AnnotationPoint;
+      before: ScreenshotAnnotation[];
+      working: ScreenshotAnnotation[];
+      moved: boolean;
+      recorded: boolean; // قبلاً در تاریخچه ثبت شده (مثلاً شکل تازه‌ساخته)
+    };
 
 interface Props {
   imageDataUrl: string;
@@ -43,468 +106,497 @@ interface Props {
   readOnly?: boolean;
 }
 
-type DrawMode = 'point' | 'line' | 'zone';
-
-const MODE_FOR_TYPE: Record<AnnotationType, DrawMode> = {
-  entry: 'point', 'stop-loss': 'point', 'take-profit': 'point',
-  support: 'line', resistance: 'line', liquidity: 'line',
-  fibonacci: 'line', 'impulse-start': 'point', 'impulse-end': 'point',
-  'range-high': 'line', 'range-low': 'line', 'important-candle': 'point',
-  zone: 'zone', arrow: 'line', label: 'point',
-};
-
 function uid(): string {
   return crypto.randomUUID();
 }
 
 function AnnotationCanvas({ imageDataUrl, annotations, onChange, readOnly = false }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
+  const labelInputRef = useRef<HTMLInputElement | null>(null);
+  const gestureRef = useRef<Gesture | null>(null);
+  const historyRef = useRef<ScreenshotAnnotation[][]>([]);
+  const lastEditRef = useRef<{ key: string; at: number } | null>(null);
 
-  const [selectedType, setSelectedType] = useState<AnnotationType>('entry');
-  const [isDrawing, setIsDrawing] = useState(false);
-  const [startPoint, setStartPoint] = useState<AnnotationPoint | null>(null);
-  const [showAnnotations, setShowAnnotations] = useState(true);
-  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [tool, setTool] = useState<Tool>('select');
+  const [role, setRole] = useState<AnnotationType>('entry');
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const dragRef = useRef<{ id: string; pointIndex: number | null; last: AnnotationPoint } | null>(null);
+  const [draft, setDraft] = useState<ScreenshotAnnotation | null>(null);
+  const [live, setLive] = useState<ScreenshotAnnotation[] | null>(null);
+  const [showAnnotations, setShowAnnotations] = useState(true);
+  const [canvasSize, setCanvasSize] = useState({ w: 1000, h: 600 });
+  const [imageReady, setImageReady] = useState(false);
+  const [historyLength, setHistoryLength] = useState(0);
+  const [resizeTick, setResizeTick] = useState(0);
 
-  // Load image onto canvas background
+  const current = live ?? annotations;
+  const selected = current.find(a => a.id === selectedId) ?? null;
+
+  // وقتی مقدار جدید از والد رسید، نسخه‌ی موقت کشیدن را کنار بگذار
   useEffect(() => {
+    setLive(null);
+  }, [annotations]);
+
+  // بارگذاری تصویر و تنظیم اندازه‌ی canvas بر اساس ابعاد واقعی تصویر (بدون کشیدگی)
+  useEffect(() => {
+    setImageReady(false);
+    if (!imageDataUrl) return;
+    let cancelled = false;
     const img = new Image();
     img.onload = () => {
+      if (cancelled) return;
+      const scale = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight));
       imgRef.current = img;
-      renderCanvas();
+      setCanvasSize({
+        w: Math.max(1, Math.round(img.naturalWidth * scale)),
+        h: Math.max(1, Math.round(img.naturalHeight * scale)),
+      });
+      setImageReady(true);
     };
     img.src = imageDataUrl;
+    return () => { cancelled = true; };
   }, [imageDataUrl]);
 
-  useEffect(() => {
-    renderCanvas();
-  }, [annotations, showAnnotations, hoveredId, selectedId]);
-
-  const getRelativePoint = (e: React.MouseEvent<HTMLCanvasElement>): AnnotationPoint => {
-    const canvas = canvasRef.current!;
-    const rect = canvas.getBoundingClientRect();
-    return {
-      x: (e.clientX - rect.left) / rect.width,
-      y: (e.clientY - rect.top) / rect.height,
-    };
-  };
+  // با تغییر اندازه‌ی نمایش، ضخامت‌ها دوباره محاسبه شوند
+  useLayoutEffect(() => {
+    const el = canvasRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => setResizeTick(t => t + 1));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   const renderCanvas = useCallback(() => {
     const canvas = canvasRef.current;
     const img = imgRef.current;
-    if (!canvas || !img) return;
-
-    const ctx = canvas.getContext('2d')!;
-    const w = canvas.width;
-    const h = canvas.height;
+    if (!canvas || !img || !imageReady) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const { width: w, height: h } = canvas;
+    const displayWidth = canvas.getBoundingClientRect().width;
+    const k = displayWidth > 0 ? w / displayWidth : 1;
 
     ctx.clearRect(0, 0, w, h);
     ctx.drawImage(img, 0, 0, w, h);
-
     if (!showAnnotations) return;
-
-    for (const ann of annotations) {
-      drawAnnotation(ctx, ann, w, h, ann.id === hoveredId);
+    for (const ann of current) {
+      drawAnnotation(ctx, ann, w, h, { k, selected: !readOnly && ann.id === selectedId });
     }
-  }, [annotations, showAnnotations, hoveredId]);
+    if (draft) drawAnnotation(ctx, draft, w, h, { k, selected: false });
+  }, [current, draft, selectedId, showAnnotations, imageReady, readOnly]);
 
-  function drawAnnotation(
-    ctx: CanvasRenderingContext2D,
-    ann: ScreenshotAnnotation,
-    w: number,
-    h: number,
-    hovered: boolean,
-  ) {
-    const color = ann.color;
-    const mode = MODE_FOR_TYPE[ann.type];
-    const active = ann.id === selectedId;
-    ctx.strokeStyle = color;
-    ctx.fillStyle = color;
-    ctx.lineWidth = hovered || active ? 3 : 2;
-    ctx.font = '12px sans-serif';
-    ctx.textBaseline = 'top';
+  useEffect(() => {
+    renderCanvas();
+  }, [renderCanvas, canvasSize, resizeTick]);
 
-    if (mode === 'point' && ann.points.length >= 1) {
-      const p = ann.points[0];
-      const px = p.x * w;
-      const py = p.y * h;
+  // ── کمکی‌ها ──────────────────────────────────────────────────────
 
-      // Circle marker
-      ctx.beginPath();
-      ctx.arc(px, py, hovered ? 8 : 6, 0, Math.PI * 2);
-      ctx.fillStyle = color + 'aa';
-      ctx.fill();
-      ctx.strokeStyle = color;
-      ctx.stroke();
+  const getPointer = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const size = { w: rect.width || 1, h: rect.height || 1 };
+    const pt = {
+      x: clamp01((e.clientX - rect.left) / size.w),
+      y: clamp01((e.clientY - rect.top) / size.h),
+    };
+    return { pt, size, tol: e.pointerType === 'touch' ? 20 : 10 };
+  };
 
-      // Label
-      ctx.fillStyle = '#fff';
-      ctx.fillText(ann.label, px + 10, py - 6);
-    } else if (mode === 'line' && ann.points.length >= 2) {
-      const p1 = ann.points[0];
-      const p2 = ann.points[1];
-      ctx.beginPath();
-      ctx.moveTo(p1.x * w, p1.y * h);
-      ctx.lineTo(p2.x * w, p2.y * h);
-      ctx.strokeStyle = color;
-      ctx.stroke();
+  const pushHistory = (snapshot: ScreenshotAnnotation[]) => {
+    historyRef.current = [...historyRef.current.slice(-49), snapshot];
+    setHistoryLength(historyRef.current.length);
+  };
 
-      // Label at midpoint
-      const mx = ((p1.x + p2.x) / 2) * w;
-      const my = ((p1.y + p2.y) / 2) * h;
-      ctx.fillStyle = color;
-      ctx.fillText(ann.label, mx + 4, my - 14);
-    } else if (mode === 'zone' && ann.points.length >= 2) {
-      const p1 = ann.points[0];
-      const p2 = ann.points[1];
-      const x = Math.min(p1.x, p2.x) * w;
-      const y = Math.min(p1.y, p2.y) * h;
-      const rw = Math.abs(p2.x - p1.x) * w;
-      const rh = Math.abs(p2.y - p1.y) * h;
+  const commit = (next: ScreenshotAnnotation[], before: ScreenshotAnnotation[] = annotations) => {
+    pushHistory(before);
+    onChange(next);
+  };
 
-      ctx.fillStyle = color;
-      ctx.fillRect(x, y, rw, rh);
-      ctx.strokeStyle = ann.color.replace('0.3', '1');
-      ctx.strokeRect(x, y, rw, rh);
-      ctx.fillStyle = '#fff';
-      ctx.fillText(ann.label, x + 4, y + 4);
-    }
-
-    if (active) {
-      ctx.fillStyle = '#fff';
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 2;
-      for (const point of ann.points) {
-        ctx.beginPath();
-        ctx.arc(point.x * w, point.y * h, 5, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-      }
-    }
-  }
-
-  const clampPoint = (point: AnnotationPoint): AnnotationPoint => ({
-    x: Math.max(0, Math.min(1, point.x)),
-    y: Math.max(0, Math.min(1, point.y)),
+  const makeAnnotation = (shape: DrawableShape, points: AnnotationPoint[]): ScreenshotAnnotation => ({
+    id: uid(),
+    type: role,
+    label: ANNOTATION_LABELS[role],
+    points,
+    color: defaultColor(role),
+    createdAt: Date.now(),
+    shape,
+    strokeWidth: 2,
+    filled: shape === 'rect' || shape === 'ellipse' ? true : undefined,
   });
 
-  const distance = (a: AnnotationPoint, b: AnnotationPoint) => Math.hypot(a.x - b.x, a.y - b.y);
+  // ── ژست‌ها (ماوس و لمس با Pointer Events) ─────────────────────────
 
-  const distanceToSegment = (point: AnnotationPoint, a: AnnotationPoint, b: AnnotationPoint) => {
-    const dx = b.x - a.x;
-    const dy = b.y - a.y;
-    const lengthSquared = dx * dx + dy * dy;
-    if (!lengthSquared) return distance(point, a);
-    const t = Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSquared));
-    return distance(point, { x: a.x + t * dx, y: a.y + t * dy });
-  };
+  const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (readOnly) return;
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const { pt, size, tol } = getPointer(e);
 
-  const findHitAnnotation = (point: AnnotationPoint) => {
-    const tolerance = 0.035;
-    for (let index = annotations.length - 1; index >= 0; index -= 1) {
-      const ann = annotations[index];
-      const mode = MODE_FOR_TYPE[ann.type];
-      const pointIndex = ann.points.findIndex(p => distance(point, p) <= tolerance);
-      if (pointIndex >= 0) return { id: ann.id, pointIndex };
-      if (mode === 'line' && ann.points.length >= 2 && distanceToSegment(point, ann.points[0], ann.points[1]) <= tolerance) {
-        return { id: ann.id, pointIndex: null };
-      }
-      if (mode === 'zone' && ann.points.length >= 2) {
-        const minX = Math.min(ann.points[0].x, ann.points[1].x);
-        const maxX = Math.max(ann.points[0].x, ann.points[1].x);
-        const minY = Math.min(ann.points[0].y, ann.points[1].y);
-        const maxY = Math.max(ann.points[0].y, ann.points[1].y);
-        if (point.x >= minX - tolerance && point.x <= maxX + tolerance &&
-          point.y >= minY - tolerance && point.y <= maxY + tolerance) {
-          return { id: ann.id, pointIndex: null };
+    if (tool === 'select') {
+      const sel = current.find(a => a.id === selectedId);
+      if (sel) {
+        const handle = hitHandle(sel, pt, size, tol + 6);
+        if (handle) {
+          gestureRef.current = {
+            kind: 'handle', id: sel.id, handle, last: pt,
+            before: current, working: current, moved: false, recorded: false,
+          };
+          return;
         }
       }
-    }
-    return null;
-  };
-
-  const beginDrag = (point: AnnotationPoint) => {
-    const hit = findHitAnnotation(point);
-    if (!hit) return false;
-    setSelectedId(hit.id);
-    dragRef.current = { ...hit, last: point };
-    return true;
-  };
-
-  const moveSelected = (point: AnnotationPoint) => {
-    const drag = dragRef.current;
-    if (!drag) return;
-    const dx = point.x - drag.last.x;
-    const dy = point.y - drag.last.y;
-    onChange(annotations.map(annotation => {
-      if (annotation.id !== drag.id) return annotation;
-      const points = annotation.points.map((item, index) => {
-        if (drag.pointIndex !== null && index !== drag.pointIndex) return item;
-        return clampPoint({ x: item.x + dx, y: item.y + dy });
-      });
-      return { ...annotation, points };
-    }));
-    drag.last = point;
-  };
-
-  const endDrag = () => {
-    dragRef.current = null;
-  };
-
-  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (readOnly) return;
-    const pt = getRelativePoint(e);
-    if (beginDrag(pt)) return;
-    const mode = MODE_FOR_TYPE[selectedType];
-
-    if (mode === 'point') {
-      // Add immediately on click
-      const ann: ScreenshotAnnotation = {
-        id: uid(),
-        type: selectedType,
-        label: ANNOTATION_LABELS[selectedType],
-        points: [pt],
-        color: ANNOTATION_COLORS[selectedType] ?? '#94a3b8',
-        createdAt: Date.now(),
-      };
-      onChange([...annotations, ann]);
-    } else {
-      setIsDrawing(true);
-      setStartPoint(pt);
-    }
-  };
-
-  const handleMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (dragRef.current) {
-      endDrag();
+      for (let i = current.length - 1; i >= 0; i -= 1) {
+        if (hitBody(current[i], pt, size, tol)) {
+          setSelectedId(current[i].id);
+          gestureRef.current = {
+            kind: 'move', id: current[i].id, last: pt,
+            before: current, working: current, moved: false, recorded: false,
+          };
+          return;
+        }
+      }
+      setSelectedId(null);
       return;
     }
-    if (!isDrawing || !startPoint || readOnly) return;
-    const pt = getRelativePoint(e);
-    const mode = MODE_FOR_TYPE[selectedType];
 
-    if (mode === 'line' || mode === 'zone') {
-      const ann: ScreenshotAnnotation = {
-        id: uid(),
-        type: selectedType,
-        label: ANNOTATION_LABELS[selectedType],
-        points: [startPoint, pt],
-        color: ANNOTATION_COLORS[selectedType] ?? '#94a3b8',
-        createdAt: Date.now(),
+    if (tool === 'vline' || tool === 'hline') {
+      // خط بلافاصله قرار می‌گیرد و می‌شود همان‌جا کشیدش
+      const ann = makeAnnotation(tool, pointsForShape(tool, pt, pt));
+      const next = [...annotations, ann];
+      commit(next);
+      setLive(next);
+      setSelectedId(ann.id);
+      setTool('select');
+      gestureRef.current = {
+        kind: 'move', id: ann.id, last: pt,
+        before: next, working: next, moved: false, recorded: true,
       };
-      onChange([...annotations, ann]);
-    }
-
-    setIsDrawing(false);
-    setStartPoint(null);
-  };
-
-  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!readOnly && dragRef.current) moveSelected(getRelativePoint(e));
-  };
-
-  // ── Touch support (mobile) ────────────────────────────────────────
-  const getTouchPoint = (e: React.TouchEvent<HTMLCanvasElement>): AnnotationPoint => {
-    const canvas = canvasRef.current!;
-    const rect = canvas.getBoundingClientRect();
-    const touch = e.changedTouches[0];
-    return {
-      x: (touch.clientX - rect.left) / rect.width,
-      y: (touch.clientY - rect.top) / rect.height,
-    };
-  };
-
-  const handleTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
-    e.preventDefault(); // prevent scroll while drawing
-    if (readOnly) return;
-    const pt = getTouchPoint(e);
-    if (beginDrag(pt)) return;
-    const mode = MODE_FOR_TYPE[selectedType];
-
-    if (mode === 'point') {
-      const ann: ScreenshotAnnotation = {
-        id: uid(),
-        type: selectedType,
-        label: ANNOTATION_LABELS[selectedType],
-        points: [pt],
-        color: ANNOTATION_COLORS[selectedType] ?? '#94a3b8',
-        createdAt: Date.now(),
-      };
-      onChange([...annotations, ann]);
-    } else {
-      setIsDrawing(true);
-      setStartPoint(pt);
-    }
-  };
-
-  const handleTouchEnd = (e: React.TouchEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-    if (dragRef.current) {
-      moveSelected(getTouchPoint(e));
-      endDrag();
       return;
     }
-    if (!isDrawing || !startPoint || readOnly) return;
-    const pt = getTouchPoint(e);
-    const mode = MODE_FOR_TYPE[selectedType];
 
-    if (mode === 'line' || mode === 'zone') {
-      const ann: ScreenshotAnnotation = {
-        id: uid(),
-        type: selectedType,
-        label: ANNOTATION_LABELS[selectedType],
-        points: [startPoint, pt],
-        color: ANNOTATION_COLORS[selectedType] ?? '#94a3b8',
-        createdAt: Date.now(),
-      };
-      onChange([...annotations, ann]);
-    }
-
-    setIsDrawing(false);
-    setStartPoint(null);
+    gestureRef.current = { kind: 'draw', shape: tool, start: pt };
+    setDraft(makeAnnotation(tool, [pt, pt]));
   };
 
-  const handleTouchMove = (e: React.TouchEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-    if (!readOnly && dragRef.current) moveSelected(getTouchPoint(e));
+  const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const gesture = gestureRef.current;
+    if (!gesture || readOnly) return;
+    const { pt } = getPointer(e);
+
+    if (gesture.kind === 'draw') {
+      setDraft(prev => (prev ? { ...prev, points: [gesture.start, pt] } : prev));
+      return;
+    }
+    const dx = pt.x - gesture.last.x;
+    const dy = pt.y - gesture.last.y;
+    gesture.working = gesture.working.map(a => {
+      if (a.id !== gesture.id) return a;
+      return gesture.kind === 'handle' && gesture.handle
+        ? dragHandle(a, gesture.handle, pt)
+        : translateAnnotation(a, dx, dy);
+    });
+    gesture.last = pt;
+    gesture.moved = true;
+    setLive(gesture.working);
+  };
+
+  const finishGesture = (e: React.PointerEvent<HTMLCanvasElement>, cancelled: boolean) => {
+    const gesture = gestureRef.current;
+    gestureRef.current = null;
+    if (!gesture || readOnly) return;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+
+    if (gesture.kind === 'draw') {
+      const { size } = getPointer(e);
+      const ann = draft;
+      setDraft(null);
+      if (cancelled || !ann || isTooSmall(gesture.shape, ann.points, size)) return;
+      commit([...annotations, ann]);
+      setSelectedId(ann.id);
+      setTool('select');
+      return;
+    }
+
+    if (cancelled || !gesture.moved) {
+      setLive(null);
+      return;
+    }
+    if (!gesture.recorded) pushHistory(gesture.before);
+    onChange(gesture.working);
+  };
+
+  // ── ویرایش شکل انتخاب‌شده ────────────────────────────────────────
+
+  const updateSelected = (patch: Partial<ScreenshotAnnotation>, key: string) => {
+    if (!selected) return;
+    const now = Date.now();
+    const last = lastEditRef.current;
+    // ویرایش‌های پشت‌سرهم یک فیلد (مثل تایپ) فقط یک مرحله در تاریخچه می‌شوند
+    if (!last || last.key !== `${selected.id}:${key}` || now - last.at > 1500) pushHistory(annotations);
+    lastEditRef.current = { key: `${selected.id}:${key}`, at: now };
+    onChange(annotations.map(a => (a.id === selected.id ? { ...a, ...patch } : a)));
+  };
+
+  const changeRole = (next: AnnotationType) => {
+    if (!selected) return;
+    const labelWasDefault = selected.label === ANNOTATION_LABELS[selected.type];
+    const colorWasDefault = toHexColor(selected.color) === toHexColor(defaultColor(selected.type));
+    updateSelected({
+      type: next,
+      shape: resolveShape(selected),
+      label: labelWasDefault ? ANNOTATION_LABELS[next] : selected.label,
+      color: colorWasDefault ? defaultColor(next) : selected.color,
+    }, 'role');
   };
 
   const removeAnnotation = (id: string) => {
-    onChange(annotations.filter(a => a.id !== id));
+    commit(annotations.filter(a => a.id !== id));
     if (selectedId === id) setSelectedId(null);
   };
 
-  const clearAll = () => {
-    onChange([]);
+  const duplicateSelected = () => {
+    if (!selected) return;
+    const offset = 0.03;
+    const moved = translateAnnotation(selected, offset, offset);
+    const copy: ScreenshotAnnotation = { ...moved, id: uid(), createdAt: Date.now(), shape: resolveShape(selected) };
+    commit([...annotations, copy]);
+    setSelectedId(copy.id);
   };
+
+  const undo = () => {
+    const previous = historyRef.current.pop();
+    setHistoryLength(historyRef.current.length);
+    if (!previous) return;
+    onChange(previous);
+    if (selectedId && !previous.some(a => a.id === selectedId)) setSelectedId(null);
+  };
+
+  const clearAll = () => {
+    if (!annotations.length) return;
+    commit([]);
+    setSelectedId(null);
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (readOnly) return;
+    if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId) {
+      e.preventDefault();
+      removeAnnotation(selectedId);
+    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+      e.preventDefault();
+      undo();
+    } else if (e.key === 'Escape') {
+      setSelectedId(null);
+      setTool('select');
+    }
+  };
+
+  const selectedShape = selected ? resolveShape(selected) : null;
 
   return (
     <div className="space-y-3">
-      {/* Toolbar */}
+      {/* نوار ابزار */}
       {!readOnly && (
-        <div className="flex flex-wrap items-center gap-2">
-          <Select value={selectedType} onValueChange={v => setSelectedType(v as AnnotationType)}>
-            <SelectTrigger className="w-44 h-8 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {(Object.keys(ANNOTATION_LABELS) as AnnotationType[]).map(t => (
-                <SelectItem key={t} value={t} className="text-xs">
-                  <span className="flex items-center gap-2">
-                    <span
-                      className="inline-block w-2 h-2 rounded-full"
-                      style={{ background: ANNOTATION_COLORS[t] ?? '#94a3b8' }}
-                    />
-                    {ANNOTATION_LABELS[t]}
-                  </span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-
-          <div className="flex gap-1 mr-auto">
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-1.5">
             <Button
-              variant="ghost" size="sm"
-              onClick={() => setShowAnnotations(v => !v)}
-              title={showAnnotations ? 'پنهان' : 'نمایش'}
+              type="button"
+              size="sm"
+              variant={tool === 'select' ? 'default' : 'outline'}
+              className="h-8 gap-1 px-2 text-xs"
+              onClick={() => setTool('select')}
+              aria-pressed={tool === 'select'}
             >
-              {showAnnotations ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+              <MousePointer2 className="h-4 w-4" />
+              انتخاب
             </Button>
-            <Button variant="ghost" size="sm" onClick={clearAll} title="پاک کردن همه">
-              <RotateCcw className="w-4 h-4" />
-            </Button>
+            {DRAW_TOOLS.map(shape => (
+              <Button
+                key={shape}
+                type="button"
+                size="sm"
+                variant={tool === shape ? 'default' : 'outline'}
+                className="h-8 gap-1 px-2 text-xs"
+                onClick={() => { setTool(shape); setSelectedId(null); }}
+                aria-pressed={tool === shape}
+                title={ANNOTATION_SHAPE_LABELS[shape]}
+              >
+                <ShapeIcon shape={shape} />
+                {ANNOTATION_SHAPE_LABELS[shape]}
+              </Button>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Select value={role} onValueChange={v => setRole(v as AnnotationType)}>
+              <SelectTrigger className="h-8 w-44 text-xs" aria-label="نقش شکل جدید">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(Object.keys(ANNOTATION_LABELS) as AnnotationType[]).map(t => (
+                  <SelectItem key={t} value={t} className="text-xs">
+                    <span className="flex items-center gap-2">
+                      <span className="inline-block h-2 w-2 rounded-full" style={{ background: defaultColor(t) }} />
+                      {ANNOTATION_LABELS[t]}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <div className="mr-auto flex gap-1">
+              <Button type="button" variant="ghost" size="sm" onClick={undo} disabled={historyLength === 0} title="بازگردانی (Undo)">
+                <Undo2 className="h-4 w-4" />
+              </Button>
+              <Button type="button" variant="ghost" size="sm" onClick={() => setShowAnnotations(v => !v)} title={showAnnotations ? 'پنهان کردن' : 'نمایش'}>
+                {showAnnotations ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+              </Button>
+              <Button type="button" variant="ghost" size="sm" onClick={clearAll} title="پاک کردن همه" disabled={annotations.length === 0}>
+                <RotateCcw className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
         </div>
       )}
 
-      {/* Canvas */}
-      <div ref={containerRef} className="relative rounded-lg overflow-hidden border border-white/10">
+      {/* بوم */}
+      <div
+        className="relative overflow-hidden rounded-lg border border-white/10 outline-none"
+        tabIndex={readOnly ? -1 : 0}
+        onKeyDown={onKeyDown}
+      >
         <canvas
           ref={canvasRef}
-          width={1000}
-          height={600}
-          className="w-full h-auto cursor-crosshair"
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onTouchStart={handleTouchStart}
-          onTouchMove={handleTouchMove}
-          onTouchEnd={handleTouchEnd}
-          style={{ cursor: readOnly ? 'default' : 'crosshair', touchAction: 'none' }}
+          width={canvasSize.w}
+          height={canvasSize.h}
+          className="block h-auto w-full"
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={e => finishGesture(e, false)}
+          onPointerCancel={e => finishGesture(e, true)}
+          style={{ cursor: readOnly ? 'default' : tool === 'select' ? 'default' : 'crosshair', touchAction: readOnly ? 'auto' : 'none' }}
         />
         {!readOnly && (
-          <div className="absolute top-2 right-2 bg-black/60 text-white text-xs px-2 py-1 rounded backdrop-blur-sm">
-            {MODE_FOR_TYPE[selectedType] === 'point'
-              ? 'کلیک کنید'
-              : 'بکشید تا خط/ناحیه ایجاد شود'}
+          <div className="pointer-events-none absolute right-2 top-2 max-w-[85%] rounded bg-black/60 px-2 py-1 text-[11px] text-white backdrop-blur-sm">
+            {TOOL_HINT[tool]}
           </div>
         )}
       </div>
 
-      {/* Annotation list */}
-      {annotations.length > 0 && (
-        <div className="space-y-1 max-h-32 overflow-y-auto">
-          {annotations.map(ann => (
-            <div
-              key={ann.id}
-              className={`flex items-center justify-between px-2 py-1 rounded text-xs
-                          ${selectedId === ann.id ? 'bg-primary/15 ring-1 ring-primary/40' : 'bg-white/5'}
-                         hover:bg-white/10 transition-colors cursor-pointer`}
-              onClick={() => setSelectedId(ann.id)}
-              onMouseEnter={() => setHoveredId(ann.id)}
-              onMouseLeave={() => setHoveredId(null)}
-            >
-              <span className="flex items-center gap-2">
-                <span
-                  className="w-2 h-2 rounded-full flex-shrink-0"
-                  style={{ background: ann.color }}
-                />
-                {ann.label}
-              </span>
-              {!readOnly && (
-                <button
-                  onClick={() => removeAnnotation(ann.id)}
-                  className="text-muted-foreground hover:text-red-400 transition-colors"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              )}
+      {/* پنل ویرایش شکل انتخاب‌شده */}
+      {!readOnly && selected && (
+        <div className="space-y-2 rounded-lg border border-primary/20 bg-primary/5 p-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs text-muted-foreground">
+              ویرایش {selectedShape ? ANNOTATION_SHAPE_LABELS[selectedShape] : 'شکل'}
+            </span>
+            <div className="flex gap-1">
+              <Button type="button" variant="ghost" size="sm" className="h-7 px-2" onClick={duplicateSelected} title="کپی">
+                <Copy className="h-3.5 w-3.5" />
+              </Button>
+              <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-red-400 hover:text-red-300" onClick={() => removeAnnotation(selected.id)} title="حذف">
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
             </div>
-          ))}
+          </div>
+
+          <div className="flex flex-wrap items-end gap-2">
+            <div className="min-w-36 flex-1">
+              <div className="flex h-5 justify-end">
+                <VoiceTypingButton targetRef={labelInputRef} />
+              </div>
+              <input
+                ref={labelInputRef}
+                value={selected.label}
+                onChange={e => updateSelected({ label: e.target.value }, 'label')}
+                className="h-8 w-full rounded-md border border-border bg-background px-2 text-xs"
+                aria-label="عنوان شکل"
+                placeholder="عنوان"
+              />
+            </div>
+            <Select value={selected.type} onValueChange={v => changeRole(v as AnnotationType)}>
+              <SelectTrigger className="h-8 w-36 text-xs" aria-label="نقش شکل">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(Object.keys(ANNOTATION_LABELS) as AnnotationType[]).map(t => (
+                  <SelectItem key={t} value={t} className="text-xs">{ANNOTATION_LABELS[t]}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <input
+              type="color"
+              value={toHexColor(selected.color)}
+              onChange={e => updateSelected({ color: e.target.value }, 'color')}
+              className="h-8 w-9 cursor-pointer rounded border border-border bg-background p-0.5"
+              aria-label="رنگ"
+            />
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-1">
+              <span className="text-[11px] text-muted-foreground">ضخامت:</span>
+              {STROKE_WIDTHS.map(width => (
+                <button
+                  key={width}
+                  type="button"
+                  onClick={() => updateSelected({ strokeWidth: width }, 'stroke')}
+                  className={cn(
+                    'flex h-7 w-7 items-center justify-center rounded border text-[11px]',
+                    (selected.strokeWidth ?? 2) === width ? 'border-primary bg-primary/20' : 'border-border bg-background',
+                  )}
+                  aria-label={`ضخامت ${width}`}
+                >
+                  {width}
+                </button>
+              ))}
+            </div>
+            {(selectedShape === 'rect' || selectedShape === 'ellipse') && (
+              <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={isFilled(selected)}
+                  onChange={e => updateSelected({ filled: e.target.checked }, 'fill')}
+                />
+                پر شود
+              </label>
+            )}
+          </div>
         </div>
       )}
 
-      {!readOnly && selectedId && (() => {
-        const selected = annotations.find(annotation => annotation.id === selectedId);
-        if (!selected) return null;
-        return (
-          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 p-2">
-            <span className="text-xs text-muted-foreground">ویرایش حاشیه‌نویسی:</span>
-            <input
-              value={selected.label}
-              onChange={e => onChange(annotations.map(annotation =>
-                annotation.id === selected.id ? { ...annotation, label: e.target.value } : annotation
-              ))}
-              className="h-7 min-w-36 flex-1 rounded-md border border-border bg-background px-2 text-xs"
-              aria-label="عنوان حاشیه‌نویسی"
-            />
-            <input
-              type="color"
-              value={selected.color.startsWith('#') ? selected.color.slice(0, 7) : '#f59e0b'}
-              onChange={e => onChange(annotations.map(annotation =>
-                annotation.id === selected.id ? { ...annotation, color: e.target.value } : annotation
-              ))}
-              className="h-7 w-9 cursor-pointer rounded border border-border bg-background p-0.5"
-              aria-label="رنگ حاشیه‌نویسی"
-            />
-            <span className="text-[10px] text-muted-foreground">دستگیره‌ها یا خود شکل را بکشید</span>
-          </div>
-        );
-      })()}
+      {/* فهرست شکل‌ها */}
+      {current.length > 0 && (
+        <div className="max-h-32 space-y-1 overflow-y-auto">
+          {current.map(ann => {
+            const shape = resolveShape(ann);
+            return (
+              <div
+                key={ann.id}
+                className={cn(
+                  'flex cursor-pointer items-center justify-between rounded px-2 py-1 text-xs transition-colors hover:bg-white/10',
+                  selectedId === ann.id ? 'bg-primary/15 ring-1 ring-primary/40' : 'bg-white/5',
+                )}
+                onClick={() => { if (!readOnly) { setSelectedId(ann.id); setTool('select'); } }}
+              >
+                <span className="flex items-center gap-2">
+                  <span className="h-2 w-2 flex-shrink-0 rounded-full" style={{ background: toHexColor(ann.color) }} />
+                  {ann.label || ANNOTATION_LABELS[ann.type]}
+                  <span className="text-[10px] text-muted-foreground">({ANNOTATION_SHAPE_LABELS[shape]})</span>
+                </span>
+                {!readOnly && (
+                  <button
+                    type="button"
+                    onClick={ev => { ev.stopPropagation(); removeAnnotation(ann.id); }}
+                    className="text-muted-foreground transition-colors hover:text-red-400"
+                    aria-label="حذف"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

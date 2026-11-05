@@ -6,6 +6,7 @@
 import { db } from '../db/database';
 import { isWin, isLoss } from '../lib/tradeHelpers';
 import { getTradingDateParts } from '../lib/tradingTime';
+import { computeMetrics, getMetricExtremesBy, getR, mean, rateFromCounts } from '../core/metrics/engine';
 
 export type InsightSeverity = 'critical' | 'warning' | 'positive' | 'info';
 
@@ -31,113 +32,91 @@ const NEGATIVE_EMOTIONS = new Set([
 ]);
 
 function winRate(wins: number, total: number) {
-  return total > 0 ? Math.round((wins / total) * 100) : 0;
+  return Math.round((rateFromCounts(wins, total) ?? 0) * 100);
 }
 
 function lossRate(losses: number, total: number) {
-  return total > 0 ? Math.round((losses / total) * 100) : 0;
+  return Math.round((rateFromCounts(losses, total) ?? 0) * 100);
 }
 
 export const insightsService = {
-  async generateAutoInsights(): Promise<AutoInsight[]> {
-    const allTrades = await db.trades.where('status').equals('closed').toArray();
+  async generateAutoInsights(accountId: string | null = null): Promise<AutoInsight[]> {
+    const loadedTrades = await db.trades.where('status').equals('closed').toArray();
+    const allTrades = accountId ? loadedTrades.filter(trade => trade.accountId === accountId) : [];
     if (allTrades.length < 3) return [];
 
     const insights: AutoInsight[] = [];
 
     // ── ۱. تحلیل ساعت معاملاتی ────────────────────────────────────────
-    const byHour: Record<number, { wins: number; losses: number }> = {};
-    allTrades.forEach(t => {
-      const h = getTradingDateParts(t.openedAt).hour;
-      if (!byHour[h]) byHour[h] = { wins: 0, losses: 0 };
-      if (t.result === 'win' || t.result === 'partial-win') byHour[h].wins++;
-      if (t.result === 'loss' || t.result === 'partial-loss') byHour[h].losses++;
-    });
-
-    const hourEntries = Object.entries(byHour)
-      .filter(([, v]) => v.wins + v.losses >= 3)
-      .map(([h, v]) => ({
-        hour: Number(h),
-        total: v.wins + v.losses,
-        wins: v.wins,
-        losses: v.losses,
-        lossRate: lossRate(v.losses, v.wins + v.losses),
-        winRate: winRate(v.wins, v.wins + v.losses),
-      }));
-
-    if (hourEntries.length > 0) {
-      const worst = [...hourEntries].sort((a, b) => b.lossRate - a.lossRate)[0];
-      if (worst.lossRate > 60) {
+    const hourExtremes = getMetricExtremesBy(
+      allTrades,
+      trade => getTradingDateParts(trade.openedAt).hour,
+      'avgR',
+      3,
+    );
+    {
+      const worstHour = hourExtremes.worst;
+      if (worstHour && worstHour.metrics.avgR !== null && worstHour.metrics.avgR < 0) {
+        const hour = Number(worstHour.key);
         insights.push({
           id: 'worst-hour',
-          title: `ساعت ${worst.hour}:00 — پرضررترین ساعت`,
-          description: `در ساعت ${worst.hour}:00 تا ${worst.hour + 1}:00، نرخ ضرر شما ${worst.lossRate}٪ است. از ${worst.total} معامله، ${worst.losses} معامله ضررده بوده.`,
-          severity: worst.lossRate > 75 ? 'critical' : 'warning',
-          dataPoints: worst.total,
+          title: `ساعت ${hour}:00 — ضعیف‌ترین ساعت معاملاتی`,
+          description: `میانگین نتیجه در این ساعت ${worstHour.metrics.avgR.toFixed(2)}R است.`,
+          severity: worstHour.metrics.avgR < -1 ? 'critical' : 'warning',
+          dataPoints: worstHour.metrics.rCount,
           category: 'زمان‌بندی',
-          metric: `${worst.lossRate}٪ ضرر`,
+          metric: `${worstHour.metrics.avgR.toFixed(2)}R میانگین`,
         });
       }
 
-      const best = [...hourEntries].sort((a, b) => b.winRate - a.winRate)[0];
-      if (best.winRate > 65) {
+      const bestHour = hourExtremes.best;
+      if (bestHour && bestHour.metrics.avgR !== null && bestHour.metrics.avgR > 0) {
+        const hour = Number(bestHour.key);
         insights.push({
           id: 'best-hour',
-          title: `ساعت ${best.hour}:00 — بهترین ساعت معاملاتی`,
-          description: `در ساعت ${best.hour}:00 تا ${best.hour + 1}:00، نرخ برد شما ${best.winRate}٪ است. از ${best.total} معامله، ${best.wins} معامله سودده بوده.`,
+          title: `ساعت ${hour}:00 — بهترین ساعت معاملاتی`,
+          description: `میانگین نتیجه در این ساعت ${bestHour.metrics.avgR.toFixed(2)}R است.`,
           severity: 'positive',
-          dataPoints: best.total,
+          dataPoints: bestHour.metrics.rCount,
           category: 'زمان‌بندی',
-          metric: `${best.winRate}٪ برد`,
+          metric: `${bestHour.metrics.avgR.toFixed(2)}R میانگین`,
         });
       }
     }
 
     // ── ۲. تحلیل روز هفته ────────────────────────────────────────────
-    const byDay: Record<number, { wins: number; losses: number }> = {};
-    allTrades.forEach(t => {
-      const d = getTradingDateParts(t.openedAt).dayOfWeek;
-      if (!byDay[d]) byDay[d] = { wins: 0, losses: 0 };
-      if (t.result === 'win' || t.result === 'partial-win') byDay[d].wins++;
-      if (t.result === 'loss' || t.result === 'partial-loss') byDay[d].losses++;
-    });
-
-    const dayEntries = Object.entries(byDay)
-      .filter(([, v]) => v.wins + v.losses >= 3)
-      .map(([d, v]) => ({
-        day: Number(d),
-        name: DAY_NAMES[Number(d)],
-        total: v.wins + v.losses,
-        wins: v.wins,
-        losses: v.losses,
-        lossRate: lossRate(v.losses, v.wins + v.losses),
-        winRate: winRate(v.wins, v.wins + v.losses),
-      }));
-
-    if (dayEntries.length > 0) {
-      const worstDay = [...dayEntries].sort((a, b) => b.lossRate - a.lossRate)[0];
-      if (worstDay.lossRate > 60) {
+    const dayExtremes = getMetricExtremesBy(
+      allTrades,
+      trade => getTradingDateParts(trade.openedAt).dayOfWeek,
+      'avgR',
+      3,
+    );
+    {
+      const worstDayGroup = dayExtremes.worst;
+      if (worstDayGroup && worstDayGroup.metrics.avgR !== null && worstDayGroup.metrics.avgR < 0) {
+        const dayName = DAY_NAMES[Number(worstDayGroup.key)];
         insights.push({
           id: 'worst-day',
-          title: `${worstDay.name} — پرضررترین روز هفته`,
-          description: `در روز ${worstDay.name} نرخ ضرر شما ${worstDay.lossRate}٪ است (${worstDay.losses} ضرر از ${worstDay.total} معامله). احتیاط بیشتری لازم است.`,
-          severity: worstDay.lossRate > 75 ? 'critical' : 'warning',
-          dataPoints: worstDay.total,
+          title: `${dayName} — ضعیف‌ترین روز هفته`,
+          description: `میانگین نتیجه در این روز ${worstDayGroup.metrics.avgR.toFixed(2)}R است. احتیاط بیشتری لازم است.`,
+          severity: worstDayGroup.metrics.avgR < -1 ? 'critical' : 'warning',
+          dataPoints: worstDayGroup.metrics.rCount,
           category: 'زمان‌بندی',
-          metric: `${worstDay.lossRate}٪ ضرر`,
+          metric: `${worstDayGroup.metrics.avgR.toFixed(2)}R میانگین`,
         });
       }
 
-      const bestDay = [...dayEntries].sort((a, b) => b.winRate - a.winRate)[0];
-      if (bestDay.winRate > 65) {
+      const bestDayGroup = dayExtremes.best;
+      if (bestDayGroup && bestDayGroup.metrics.avgR !== null && bestDayGroup.metrics.avgR > 0) {
+        const dayName = DAY_NAMES[Number(bestDayGroup.key)];
         insights.push({
           id: 'best-day',
-          title: `${bestDay.name} — بهترین روز هفته برای معامله`,
-          description: `در روز ${bestDay.name} نرخ برد شما ${bestDay.winRate}٪ است (${bestDay.wins} برد از ${bestDay.total} معامله).`,
+          title: `${dayName} — بهترین روز هفته برای معامله`,
+          description: `میانگین نتیجه در این روز ${bestDayGroup.metrics.avgR.toFixed(2)}R است.`,
           severity: 'positive',
-          dataPoints: bestDay.total,
+          dataPoints: bestDayGroup.metrics.rCount,
           category: 'زمان‌بندی',
-          metric: `${bestDay.winRate}٪ برد`,
+          metric: `${bestDayGroup.metrics.avgR.toFixed(2)}R میانگین`,
         });
       }
     }
@@ -249,11 +228,10 @@ export const insightsService = {
         .map(sid => {
           const sTrades = allTrades.filter(t => t.strategyId === sid);
           if (sTrades.length < 3) return null;
-          const wins = sTrades.filter(t => t.result === 'win' || t.result === 'partial-win').length;
-          const losses = sTrades.filter(t => t.result === 'loss' || t.result === 'partial-loss').length;
-          const totalR = sTrades.reduce((acc, t) => acc + (t.rMultiple || 0), 0);
-          const avgR = sTrades.filter(t => t.rMultiple !== null).length > 0
-            ? totalR / sTrades.filter(t => t.rMultiple !== null).length : 0;
+          const metrics = computeMetrics(sTrades);
+          const wins = metrics.winCount;
+          const losses = metrics.lossCount;
+          const avgR = metrics.avgR ?? 0;
           return { id: sid, name: stratMap[sid] || sid, total: sTrades.length,
             wins, losses, wr: winRate(wins, sTrades.length), avgR };
         })
@@ -322,9 +300,9 @@ export const insightsService = {
     }
 
     // ── ۷. تحلیل R-Multiple ─────────────────────────────────────────
-    const withR = allTrades.filter(t => t.rMultiple !== null);
+    const withR = allTrades.map(getR).filter((r): r is number => r !== null);
     if (withR.length >= 5) {
-      const avgR = withR.reduce((acc, t) => acc + (t.rMultiple || 0), 0) / withR.length;
+      const avgR = mean(withR) ?? 0;
       if (avgR < -0.3) {
         insights.push({
           id: 'avg-r-negative',

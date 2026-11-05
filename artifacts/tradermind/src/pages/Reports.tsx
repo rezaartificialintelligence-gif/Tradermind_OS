@@ -3,6 +3,7 @@ import { Skeleton } from "../components/ui/skeleton";
 import { tradeService } from "../services/tradeService";
 import { journalService } from "../services/journalService";
 import { db } from "../db/database";
+import { useAccountAnalyticsScope } from "../contexts/AccountAnalyticsContext";
 import { Trade, DailyJournal, Strategy } from "../db/database";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Separator } from "../components/ui/separator";
@@ -162,7 +163,8 @@ function ChartTooltip({ active, payload, label, prefix = "" }: {
 export default function Reports() {
   const tradingTimeMode = useAppStore(s => s.tradingTimeMode);
   const brokerUtcOffsetMinutes = useAppStore(s => s.brokerUtcOffsetMinutes);
-  const [allTrades, setAllTrades]   = useState<Trade[]>([]);
+  const [loadedTrades, setAllTrades] = useState<Trade[]>([]);
+  const { scopedTrades: allTrades } = useAccountAnalyticsScope(loadedTrades);
   const [journals, setJournals]     = useState<DailyJournal[]>([]);
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [loading, setLoading]       = useState(true);

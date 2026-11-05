@@ -26,6 +26,10 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAppStore } from '@/store/useAppStore';
+import { useAccountAnalyticsScope } from '../contexts/AccountAnalyticsContext';
+import { AdvancedOverview } from '@/components/analytics/AdvancedOverview';
+import { Panel } from '@/components/ds';
+import { useStartEquity } from '../hooks/useStartEquity';
 
 // ─── Helpers ──────────────────────────────────────────────────────
 function isWin(t: Trade)  { return t.result === 'win' || t.result === 'partial-win'; }
@@ -122,12 +126,33 @@ type TabKey = 'summary' | 'timing' | 'assets' | 'equity';
 type RangeKey = Exclude<TimeRangeKey, 'custom'> | 'all';
 
 // ─── Main Component ───────────────────────────────────────────────
+function FilterSelect({ label, value, onChange, options }: {
+  label: string; value: string; onChange: (v: string) => void; options: [string, string][];
+}) {
+  return (
+    <label className="flex min-w-0 flex-col gap-1 text-[11px] text-muted-foreground">
+      {label}
+      <Select value={value} onValueChange={onChange}>
+        <SelectTrigger className="h-8 text-xs" aria-label={label}><SelectValue /></SelectTrigger>
+        <SelectContent>
+          {options.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}
+        </SelectContent>
+      </Select>
+    </label>
+  );
+}
+
 export default function AdvancedAnalytics() {
   const tradingTimeMode = useAppStore(s => s.tradingTimeMode);
   const brokerUtcOffsetMinutes = useAppStore(s => s.brokerUtcOffsetMinutes);
   const [range, setRange]       = useState<RangeKey>('all');
   const [tab, setTab]           = useState<TabKey>('summary');
-  const [allTrades, setAllTrades]   = useState<Trade[]>([]);
+  const [symbolF, setSymbolF]     = useState('all');
+  const [strategyF, setStrategyF] = useState('all');
+  const [dirF, setDirF]           = useState<'all' | 'long' | 'short'>('all');
+  const [resultF, setResultF]     = useState<'all' | 'win' | 'loss' | 'breakeven'>('all');
+  const [loadedTrades, setAllTrades] = useState<Trade[]>([]);
+  const { scopedTrades: allTrades } = useAccountAnalyticsScope(loadedTrades);
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [loading, setLoading]   = useState(true);
 
@@ -152,15 +177,35 @@ export default function AdvancedAnalytics() {
 
   // ── Filtered trades ──────────────────────────────────────────
   const trades = useMemo(() => {
-    if (range === 'all') return allTrades;
-    const { from, to } = getDateRange(range as Exclude<TimeRangeKey, 'custom'>);
-    return filterTradesByRange(allTrades, from, to);
-  }, [allTrades, range, tradingTimeMode, brokerUtcOffsetMinutes]);
+    let base = allTrades;
+    if (range !== 'all') {
+      const { from, to } = getDateRange(range as Exclude<TimeRangeKey, 'custom'>);
+      base = filterTradesByRange(allTrades, from, to);
+    }
+    // فیلترهای گزارش: همه‌ی نمودارها و آمار از همین فهرست تغذیه می‌شوند
+    return base.filter(t =>
+      (symbolF === 'all' || t.symbol === symbolF) &&
+      (strategyF === 'all' || (strategyF === 'none' ? !t.strategyId : t.strategyId === strategyF)) &&
+      (dirF === 'all' || t.direction === dirF) &&
+      (resultF === 'all'
+        || (resultF === 'win' && isWin(t))
+        || (resultF === 'loss' && isLoss(t))
+        || (resultF === 'breakeven' && t.result === 'breakeven')),
+    );
+  }, [allTrades, range, symbolF, strategyF, dirF, resultF, tradingTimeMode, brokerUtcOffsetMinutes]);
+
+  const symbolOptions = useMemo(() => [...new Set(allTrades.map(t => t.symbol).filter(Boolean))].sort(), [allTrades]);
+  const strategyNameOf = useMemo(() => {
+    const m = new Map(strategies.map(s => [s.id, s.name]));
+    return (id: string) => m.get(id) ?? 'استراتژی نامشخص';
+  }, [strategies]);
+  const filtersActive = symbolF !== 'all' || strategyF !== 'all' || dirF !== 'all' || resultF !== 'all';
 
   const closedTrades = useMemo(() => trades.filter(isClosed), [trades]);
 
   // ── Core metrics ─────────────────────────────────────────────
-  const profile   = useMemo(() => getPerformanceProfile(trades), [trades]);
+  const startEquity = useStartEquity(allTrades, trades);
+  const profile   = useMemo(() => getPerformanceProfile(trades, { startBalance: startEquity }), [trades, startEquity]);
   const analytics = useMemo(
     () => computeAnalytics(trades, [], strategies),
     [trades, strategies],
@@ -272,6 +317,7 @@ export default function AdvancedAnalytics() {
   // ══════════════════════════════════════════════════════════════
   const summaryTab = (
     <div className="space-y-4">
+      <AdvancedOverview trades={trades} strategyName={strategyNameOf} />
       {/* Row 1: Key metrics */}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         <MetricCard
@@ -339,7 +385,7 @@ export default function AdvancedAnalytics() {
         />
         <MetricCard
           label="Max Drawdown"
-          value={profile.maxDrawdownPct !== null ? `${profile.maxDrawdownPct.toFixed(1)}٪` : '—'}
+          value={profile.maxDrawdownPct !== null ? `${profile.maxDrawdownPct.toFixed(1)}٪` : profile.maxDrawdownAbs > 0 ? profile.maxDrawdownAbs.toFixed(2) : '—'}
           sub="حداکثر افت سرمایه"
           color={profile.maxDrawdownPct !== null && profile.maxDrawdownPct > 20 ? 'text-destructive' : ''}
         />
@@ -427,7 +473,7 @@ export default function AdvancedAnalytics() {
   // Tab: Timing
   // ══════════════════════════════════════════════════════════════
   const timingTab = (
-    <div className="space-y-4">
+    <div className="grid gap-4 xl:grid-cols-2 items-start [&>*:first-child:nth-last-child(1)]:xl:col-span-2">
       {/* Day of Week */}
       <Card>
         <CardHeader className="pb-2">
@@ -456,7 +502,7 @@ export default function AdvancedAnalytics() {
               {/* Ranked list */}
               <div className="space-y-2 pt-1">
                 {[...byDay]
-                  .sort((a, b) => (b.winRate ?? 0) - (a.winRate ?? 0))
+                  .sort((a, b) => (b.winRate ?? -1) - (a.winRate ?? -1))
                   .map((d, i) => (
                     <div key={i} className="flex items-center gap-2 text-sm">
                       <span className="w-20 text-muted-foreground shrink-0 text-xs">{d.dayName}</span>
@@ -479,21 +525,22 @@ export default function AdvancedAnalytics() {
 
               {/* Best/Worst day callouts */}
               {byDay.length >= 2 && (() => {
-                const sorted = [...byDay].filter(d => d.count >= 2);
+                const sorted = [...byDay].filter(d => d.rCount >= 3 && d.avgR !== null);
                 if (sorted.length < 2) return null;
-                const best  = [...sorted].sort((a, b) => (b.winRate ?? 0) - (a.winRate ?? 0))[0];
-                const worst = [...sorted].sort((a, b) => (a.winRate ?? 0) - (b.winRate ?? 0))[0];
+                const best = sorted.find(d => d.bestByAvgR);
+                const worst = sorted.find(d => d.worstByAvgR);
+                if (!best || !worst) return null;
                 return (
                   <div className="grid grid-cols-2 gap-2 pt-1">
                     <div className="rounded-lg border bg-green-500/5 border-green-500/20 p-3 text-center">
                       <p className="text-[10px] text-muted-foreground">بهترین روز</p>
                       <p className="font-bold text-green-500">{best.dayName}</p>
-                      <p className="text-xs text-muted-foreground">{best.winRate !== null ? `${(best.winRate * 100).toFixed(0)}٪ برد` : '—'}</p>
+                      <p className="text-xs text-muted-foreground">{best.avgR?.toFixed(2)}R میانگین</p>
                     </div>
                     <div className="rounded-lg border bg-destructive/5 border-destructive/20 p-3 text-center">
                       <p className="text-[10px] text-muted-foreground">ضعیف‌ترین روز</p>
                       <p className="font-bold text-destructive">{worst.dayName}</p>
-                      <p className="text-xs text-muted-foreground">{worst.winRate !== null ? `${(worst.winRate * 100).toFixed(0)}٪ برد` : '—'}</p>
+                      <p className="text-xs text-muted-foreground">{worst.avgR?.toFixed(2)}R میانگین</p>
                     </div>
                   </div>
                 );
@@ -614,7 +661,7 @@ export default function AdvancedAnalytics() {
   // Tab: Assets
   // ══════════════════════════════════════════════════════════════
   const assetsTab = (
-    <div className="space-y-4">
+    <div className="grid gap-4 xl:grid-cols-2 items-start [&>*:first-child:nth-last-child(1)]:xl:col-span-2">
       {/* Symbol Performance */}
       <Card>
         <CardHeader className="pb-2">
@@ -746,7 +793,7 @@ export default function AdvancedAnalytics() {
   // Tab: Equity Curve
   // ══════════════════════════════════════════════════════════════
   const equityTab = (
-    <div className="space-y-4">
+    <div className="grid gap-4 xl:grid-cols-2 items-start [&>*:first-child:nth-last-child(1)]:xl:col-span-2">
       {/* Equity Curve */}
       <Card>
         <CardHeader className="pb-2">
@@ -888,7 +935,7 @@ export default function AdvancedAnalytics() {
   // Final Render
   // ══════════════════════════════════════════════════════════════
   return (
-    <div className="p-3 sm:p-4 max-w-3xl mx-auto space-y-4 pb-24 md:pb-6">
+    <div className="p-0 sm:p-1 max-w-6xl mx-auto space-y-4 pb-24 md:pb-6" dir="rtl">
       {/* Header */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
@@ -913,6 +960,27 @@ export default function AdvancedAnalytics() {
           </SelectContent>
         </Select>
       </div>
+
+
+      {/* فیلترهای گزارش — به همه‌ی نمودارها و آمار متصل‌اند */}
+      <Panel inner className="p-3" data-testid="report-filters">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <FilterSelect label="نماد" value={symbolF} onChange={setSymbolF}
+            options={[['all', 'همه‌ی نمادها'], ...symbolOptions.map(x => [x, x] as [string, string])]} />
+          <FilterSelect label="استراتژی" value={strategyF} onChange={setStrategyF}
+            options={[['all', 'همه‌ی استراتژی‌ها'], ...strategies.map(x => [x.id, x.name] as [string, string]), ['none', 'بدون استراتژی']]} />
+          <FilterSelect label="جهت" value={dirF} onChange={v => setDirF(v as typeof dirF)}
+            options={[['all', 'همه'], ['long', 'خرید'], ['short', 'فروش']]} />
+          <FilterSelect label="نتیجه" value={resultF} onChange={v => setResultF(v as typeof resultF)}
+            options={[['all', 'همه'], ['win', 'سودده'], ['loss', 'ضرر'], ['breakeven', 'سر به سر']]} />
+        </div>
+        {filtersActive && (
+          <button type="button" className="mt-2 text-xs text-primary hover:underline"
+            onClick={() => { setSymbolF('all'); setStrategyF('all'); setDirF('all'); setResultF('all'); }}>
+            حذف فیلترها
+          </button>
+        )}
+      </Panel>
 
       {/* Sample size warning */}
       {profile.sampleWarning && (

@@ -4,8 +4,12 @@
  */
 
 import { Trade } from '../db/database';
-import { avg, median, stdDev, isWin, isLoss, isClosed, getNetPnl } from '../lib/tradeHelpers';
-import { getTradingDateKey, getTradingDateParts, getTradingMonthKey } from '../lib/tradingTime';
+import { isWin, isLoss, isClosed, getNetPnl } from '../lib/tradeHelpers';
+import { getTradingDateKey, getTradingDateParts, getTradingMonthKey, getTradingWeekStartKey } from '../lib/tradingTime';
+import {
+  computeMetrics, getR, winRateOf, mean as avg, median, stdDev,
+} from '../core/metrics/engine';
+import { computeDrawdownSeries } from '../core/metrics/drawdown';
 
 // ─────────────────────────────────────────────────────────────────
 // Types
@@ -51,9 +55,7 @@ export function tradeRiskPct(t: Trade): number | null {
 }
 
 export function tradeRMultiple(t: Trade): number | null {
-  if (t.rMultiple !== null && t.rMultiple !== undefined) return t.rMultiple;
-  if (t.profitLoss && t.riskAmount && t.riskAmount > 0) return t.profitLoss / t.riskAmount;
-  return null;
+  return getR(t);
 }
 
 /** کدام روز هفته UTC+3:30 (تهران) — 0=شنبه...6=جمعه */
@@ -75,11 +77,7 @@ export function dateStr(ts: number): string {
 }
 
 export function weekKey(ts: number): string {
-  const p = getTradingDateParts(ts);
-  const d = new Date(Date.UTC(p.year, p.month, p.day));
-  const day = d.getUTCDay() || 7;
-  d.setUTCDate(d.getUTCDate() - day + 1);
-  return getTradingDateKey(d.getTime());
+  return getTradingWeekStartKey(ts);
 }
 
 export const SESSION_LABELS: Record<string, string> = {
@@ -107,7 +105,8 @@ export interface RiskConsistency {
 
 export function getRiskConsistency(trades: Trade[]): RiskConsistency {
   const risks = trades
-    .filter(t => isClosed(t) && t.riskPercentage !== null && t.riskPercentage! > 0)
+    .filter(t => isClosed(t) && typeof t.riskPercentage === 'number'
+      && Number.isFinite(t.riskPercentage) && t.riskPercentage > 0)
     .map(t => t.riskPercentage!);
   const n = risks.length;
   if (!n) return { count: 0, avg: null, median: null, min: null, max: null, stdDev: null, cv: null, smallSample: true };
@@ -148,10 +147,11 @@ export function getDailyRiskExposure(
 ): DailyRiskExposure {
   const dayTrades = trades.filter(t => dateStr(t.openedAt) === dateStr_);
   const closed = dayTrades.filter(isClosed);
-  const pnls = closed.filter(t => t.profitLoss !== null).map(t => t.profitLoss!);
+  const pnlTrades = closed.filter(t => getNetPnl(t) !== null);
+  const pnlMetrics = computeMetrics(pnlTrades);
   const risks = dayTrades.filter(t => t.riskPercentage !== null).map(t => t.riskPercentage!);
   const amts = dayTrades.filter(t => t.riskAmount !== null).map(t => t.riskAmount!);
-  const losses = closed.filter(t => (t.profitLoss ?? 0) < 0).map(t => t.profitLoss!);
+  const losses = closed.filter(t => (getNetPnl(t) ?? 0) < 0).map(t => getNetPnl(t)!);
   const maxRisk = profile?.maxRiskPct ?? null;
   const violations = maxRisk !== null ? dayTrades.filter(t => (t.riskPercentage ?? 0) > maxRisk).length : 0;
   return {
@@ -159,7 +159,7 @@ export function getDailyRiskExposure(
     tradeCount: dayTrades.length,
     totalRiskPct: risks.length ? risks.reduce((s, v) => s + v, 0) : null,
     totalRiskAmt: amts.length ? amts.reduce((s, v) => s + v, 0) : null,
-    totalPnl: pnls.length ? pnls.reduce((s, v) => s + v, 0) : null,
+    totalPnl: pnlMetrics.expectancyPnl !== null ? pnlMetrics.netPnl : null,
     totalLoss: losses.length ? losses.reduce((s, v) => s + v, 0) : null,
     violations,
     maxRiskPct: risks.length ? Math.max(...risks) : null,
@@ -199,8 +199,9 @@ export function getWeeklyRiskExposures(trades: Trade[], profile: RiskProfileData
   return [...byWeek.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([wk, wt]) => {
     const risks = wt.filter(t => t.riskPercentage !== null).map(t => t.riskPercentage!);
     const amts = wt.filter(t => t.riskAmount !== null).map(t => t.riskAmount!);
-    const pnls = wt.filter(t => t.profitLoss !== null).map(t => t.profitLoss!);
-    const losses = wt.filter(t => (t.profitLoss ?? 0) < 0).map(t => t.profitLoss!);
+    const pnlTrades = wt.filter(t => isClosed(t) && getNetPnl(t) !== null);
+    const pnlMetrics = computeMetrics(pnlTrades);
+    const losses = wt.filter(t => (getNetPnl(t) ?? 0) < 0).map(t => getNetPnl(t)!);
     const violations = maxRisk !== null ? wt.filter(t => (t.riskPercentage ?? 0) > maxRisk).length : 0;
     // رصد افزایش ریسک طی هفته
     let escalation = false;
@@ -214,7 +215,7 @@ export function getWeeklyRiskExposures(trades: Trade[], profile: RiskProfileData
       tradeCount: wt.length,
       totalRiskPct: risks.length ? risks.reduce((s, v) => s + v, 0) : null,
       totalRiskAmt: amts.length ? amts.reduce((s, v) => s + v, 0) : null,
-      totalPnl: pnls.length ? pnls.reduce((s, v) => s + v, 0) : null,
+      totalPnl: pnlMetrics.expectancyPnl !== null ? pnlMetrics.netPnl : null,
       totalLoss: losses.length ? losses.reduce((s, v) => s + v, 0) : null,
       avgRiskPct: avg(risks),
       maxRiskPct: risks.length ? Math.max(...risks) : null,
@@ -248,9 +249,7 @@ export function getRiskByDayOfWeek(trades: Trade[], profile: RiskProfileData | n
     const dt = trades.filter(t => getTradingDateParts(t.openedAt).dayOfWeek === day);
     const risks = dt.filter(t => t.riskPercentage !== null).map(t => t.riskPercentage!);
     const rs = dt.filter(t => tradeRMultiple(t) !== null).map(t => tradeRMultiple(t)!);
-    const closed = dt.filter(isClosed);
-    const wins = closed.filter(isWin).length;
-    const losses = dt.filter(t => (t.profitLoss ?? 0) < 0).map(t => t.profitLoss!);
+    const losses = dt.filter(t => (getNetPnl(t) ?? 0) < 0).map(t => getNetPnl(t)!);
     const violations = maxRisk !== null ? dt.filter(t => (t.riskPercentage ?? 0) > maxRisk).length : 0;
     return {
       day,
@@ -259,7 +258,7 @@ export function getRiskByDayOfWeek(trades: Trade[], profile: RiskProfileData | n
       avgRisk: avg(risks),
       medianRisk: median(risks),
       avgR: avg(rs),
-      winRate: closed.length > 0 ? wins / closed.length : null,
+      winRate: winRateOf(dt),
       avgLoss: avg(losses),
       maxLoss: losses.length ? Math.min(...losses) : null,
       violations,
@@ -295,9 +294,7 @@ export function getRiskBySession(trades: Trade[], profile: RiskProfileData | nul
     });
     const risks = st.filter(t => t.riskPercentage !== null).map(t => t.riskPercentage!);
     const rs = st.filter(t => tradeRMultiple(t) !== null).map(t => tradeRMultiple(t)!);
-    const closed = st.filter(isClosed);
-    const wins = closed.filter(isWin).length;
-    const losses = st.filter(t => (t.profitLoss ?? 0) < 0).map(t => t.profitLoss!);
+    const losses = st.filter(t => (getNetPnl(t) ?? 0) < 0).map(t => getNetPnl(t)!);
     const violations = maxRisk !== null ? st.filter(t => (t.riskPercentage ?? 0) > maxRisk).length : 0;
     return {
       session: sess,
@@ -305,7 +302,7 @@ export function getRiskBySession(trades: Trade[], profile: RiskProfileData | nul
       count: st.length,
       avgRisk: avg(risks),
       avgR: avg(rs),
-      winRate: closed.length > 0 ? wins / closed.length : null,
+      winRate: winRateOf(st),
       avgLoss: avg(losses),
       maxLoss: losses.length ? Math.min(...losses) : null,
       violations,
@@ -402,12 +399,12 @@ export function getPostWinBehavior(trades: Trade[]): PostStreakBehavior[] {
 export interface DrawdownPoint {
   date: string;
   equity: number;
-  drawdownPct: number;
+  drawdownPct: number | null;
 }
 
 export interface DrawdownAnalysis {
-  currentDrawdownPct: number;
-  maxDrawdownPct: number;
+  currentDrawdownPct: number | null;
+  maxDrawdownPct: number | null;
   maxDrawdownDate: string | null;
   recoveryDate: string | null;
   recoveryDays: number | null;
@@ -419,81 +416,58 @@ export interface DrawdownAnalysis {
   smallSample: boolean;
 }
 
-export function getDrawdownAnalysis(trades: Trade[], startEquity: number): DrawdownAnalysis {
-  const sorted = [...trades]
-    .filter(t => isClosed(t) && t.closedAt !== null)
-    .sort((a, b) => a.closedAt! - b.closedAt!);
-
-  if (!sorted.length) {
-    return {
-      currentDrawdownPct: 0, maxDrawdownPct: 0, maxDrawdownDate: null,
-      recoveryDate: null, recoveryDays: null, currentConsecutiveLosses: 0,
-      isInDrawdown: false, tradesInMaxDD: 0, avgRiskDuringMaxDD: null,
-      curve: [], smallSample: true,
-    };
-  }
-
-  let equity = startEquity;
-  let peak = startEquity;
-  let maxDD = 0;
-  let maxDDDate: string | null = null;
-  let ddStart: string | null = null;
-  let recoveryDate: string | null = null;
-  let maxDDStart: string | null = null;
-  const curve: DrawdownPoint[] = [];
-
-  sorted.forEach(t => {
-    equity += getNetPnl(t) ?? 0;
-    if (equity > peak) {
-      if (ddStart && !recoveryDate) recoveryDate = dateStr(t.closedAt!);
-      peak = equity;
-      ddStart = null;
-    }
-    const dd = peak > 0 ? ((peak - equity) / peak) * 100 : 0;
-    if (dd > 0 && ddStart === null) ddStart = dateStr(t.closedAt!);
-    if (dd > maxDD) {
-      maxDD = dd;
-      maxDDDate = dateStr(t.closedAt!);
-      maxDDStart = ddStart;
-    }
-    curve.push({ date: dateStr(t.closedAt!), equity, drawdownPct: dd });
-  });
-
-  const currentDD = peak > 0 ? ((peak - equity) / peak) * 100 : 0;
-
-  // Current consecutive losses
-  let consLoss = 0;
-  for (let i = sorted.length - 1; i >= 0; i--) {
-    if (isLoss(sorted[i])) consLoss++;
+export function getDrawdownAnalysis(trades: Trade[], startEquity: number | null): DrawdownAnalysis {
+  const orderedClosed = [...trades]
+    .filter(isClosed)
+    .sort((a, b) =>
+      (a.closedAt ?? a.openedAt) - (b.closedAt ?? b.openedAt)
+      || a.openedAt - b.openedAt
+      || a.id.localeCompare(b.id),
+    );
+  const result = computeDrawdownSeries(trades, { startBalance: startEquity });
+  const maxAt = result.maxPercentageAt ?? result.maxAbsoluteAt;
+  const maxStartAt = result.maxPercentageStartAt ?? result.maxAbsoluteStartAt;
+  const recoveryAt = result.maxPercentageAt !== null
+    ? result.maxPercentageRecoveryAt
+    : result.maxAbsoluteRecoveryAt;
+  const maxDrawdownDate = maxAt === null ? null : dateStr(maxAt);
+  const recoveryDate = recoveryAt === null ? null : dateStr(recoveryAt);
+  let currentConsecutiveLosses = 0;
+  for (let i = orderedClosed.length - 1; i >= 0; i--) {
+    if (isLoss(orderedClosed[i])) currentConsecutiveLosses++;
     else break;
   }
 
-  // Trades during max DD period
-  const tradesInDD = maxDDStart && maxDDDate
-    ? sorted.filter(t => {
-        const d = dateStr(t.closedAt!);
-        return d >= maxDDStart! && d <= maxDDDate!;
+  const tradesInMaxDD = maxStartAt !== null && maxAt !== null
+    ? orderedClosed.filter(trade => {
+        const timestamp = trade.closedAt ?? trade.openedAt;
+        return timestamp >= maxStartAt && timestamp <= maxAt;
       })
     : [];
-
-  // Recovery days
-  let recovDays: number | null = null;
-  if (maxDDDate && recoveryDate) {
-    recovDays = Math.round((new Date(recoveryDate).getTime() - new Date(maxDDDate).getTime()) / 86400000);
-  }
+  const recoveryDays = maxDrawdownDate && recoveryDate
+    ? Math.round((new Date(recoveryDate).getTime() - new Date(maxDrawdownDate).getTime()) / 86_400_000)
+    : null;
 
   return {
-    currentDrawdownPct: currentDD,
-    maxDrawdownPct: maxDD,
-    maxDrawdownDate: maxDDDate,
-    recoveryDate: recoveryDate,
-    recoveryDays: recovDays,
-    currentConsecutiveLosses: consLoss,
-    isInDrawdown: currentDD > 0,
-    tradesInMaxDD: tradesInDD.length,
-    avgRiskDuringMaxDD: avg(tradesInDD.filter(t => t.riskPercentage !== null).map(t => t.riskPercentage!)),
-    curve,
-    smallSample: sorted.length < 10,
+    currentDrawdownPct: result.currentPercentage,
+    maxDrawdownPct: result.percentage,
+    maxDrawdownDate,
+    recoveryDate,
+    recoveryDays,
+    currentConsecutiveLosses,
+    isInDrawdown: result.currentAbsolute > 0,
+    tradesInMaxDD: tradesInMaxDD.length,
+    avgRiskDuringMaxDD: avg(
+      tradesInMaxDD
+        .map(trade => trade.riskPercentage)
+        .filter((value): value is number => typeof value === 'number' && Number.isFinite(value)),
+    ),
+    curve: result.curve.map(point => ({
+      date: dateStr(point.timestamp),
+      equity: point.equity,
+      drawdownPct: point.percentage,
+    })),
+    smallSample: orderedClosed.length < 10,
   };
 }
 
@@ -829,13 +803,19 @@ export function getRiskQualityScore(trades: Trade[], profile: RiskProfileData | 
   });
 
   // C5: Drawdown behavior (15%)
-  const startEq = profile?.accountEquity ?? profile?.accountBalance ?? 10000;
+  const startEq = profile?.accountEquity ?? profile?.accountBalance ?? null;
   const dda = getDrawdownAnalysis(closed, startEq);
   const maxDDLimit = profile?.maxDrawdownPct ?? 20;
-  const ddScore = Math.max(0, 100 - (dda.maxDrawdownPct / maxDDLimit) * 100);
+  const ddScore = dda.maxDrawdownPct === null
+    ? 50
+    : maxDDLimit > 0
+      ? Math.max(0, 100 - (dda.maxDrawdownPct / maxDDLimit) * 100)
+      : dda.maxDrawdownPct === 0 ? 100 : 0;
   components.push({
     label: 'کنترل افت سرمایه', score: ddScore, weight: 0.15,
-    description: `بیشترین افت: ${dda.maxDrawdownPct.toFixed(1)}% (محدوده مجاز: ${maxDDLimit}%)`,
+    description: dda.maxDrawdownPct === null
+      ? 'برای محاسبه درصد افت، موجودی شروع ثبت نشده است'
+      : `بیشترین افت: ${dda.maxDrawdownPct.toFixed(1)}% (محدوده مجاز: ${maxDDLimit}%)`,
     sampleSize: n,
   });
 
@@ -1137,7 +1117,7 @@ export interface PreTradeBriefing {
   weeklyRiskLimit: number | null;
   currentConsecutiveLosses: number;
   maxConsecutiveLossLimit: number | null;
-  currentDrawdownPct: number;
+  currentDrawdownPct: number | null;
   maxDrawdownLimit: number | null;
   historicalAvgRiskInSetup: number | null;
   historicalAvgRiskInSession: number | null;
@@ -1167,7 +1147,7 @@ export function getPreTradeBriefing(
     else break;
   }
 
-  const startEq = profile?.accountEquity ?? profile?.accountBalance ?? 10000;
+  const startEq = profile?.accountEquity ?? profile?.accountBalance ?? null;
   const dda = getDrawdownAnalysis(closed, startEq);
 
   // Setup-specific history
@@ -1180,7 +1160,8 @@ export function getPreTradeBriefing(
       warnings.push(`ریسک روزانه به ${todayRisk.toFixed(1)}% رسیده — محدودیت: ${profile.maxDailyRiskPct}%`);
     if (profile.maxConsecutiveLosses !== null && consLoss >= profile.maxConsecutiveLosses)
       warnings.push(`${consLoss} ضرر متوالی — مرور قوانین توصیه می‌شود`);
-    if (profile.maxDrawdownPct !== null && dda.currentDrawdownPct >= profile.maxDrawdownPct * 0.8)
+    if (profile.maxDrawdownPct !== null && dda.currentDrawdownPct !== null
+      && dda.currentDrawdownPct >= profile.maxDrawdownPct * 0.8)
       warnings.push(`افت سرمایه فعلی ${dda.currentDrawdownPct.toFixed(1)}% — محدودیت: ${profile.maxDrawdownPct}%`);
   }
 
@@ -1260,15 +1241,13 @@ export function getRiskHeatmapBySymbol(trades: Trade[], profile: RiskProfileData
   });
   const maxRisk = profile?.maxRiskPct ?? null;
   return [...bySymbol.entries()].map(([sym, ts]) => {
-    const closed = ts.filter(isClosed);
-    const wins = closed.filter(isWin).length;
     const violations = maxRisk !== null ? ts.filter(t => (t.riskPercentage ?? 0) > maxRisk).length : 0;
     return {
       key: sym,
       label: sym,
       count: ts.length,
       avgRisk: avg(ts.filter(t => t.riskPercentage !== null).map(t => t.riskPercentage!)),
-      winRate: closed.length > 0 ? wins / closed.length : null,
+      winRate: winRateOf(ts),
       violations,
     };
   }).sort((a, b) => b.count - a.count);

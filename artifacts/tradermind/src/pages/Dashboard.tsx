@@ -34,17 +34,23 @@ import { getByDay, getBySession } from "../services/performanceService";
 import { useAppStore } from "../store/useAppStore";
 import { getTradingDateKey, getTradingDateRange, getTradingMonthKey } from "../lib/tradingTime";
 import { getNetPnl } from "../lib/tradeHelpers";
+import { DashboardOverview } from "../components/dashboard/DashboardOverview";
+import { useStartEquity } from "../hooks/useStartEquity";
+import { useAccountAnalyticsScope } from "../contexts/AccountAnalyticsContext";
+import { computeMetrics, computeMetricsBy } from "../core/metrics/engine";
+import { computePnlCurve } from "../core/metrics/pnl";
 
 // ══════════════════════════════════════════════════════════════════
 // ثوابت و نوع‌ها
 // ══════════════════════════════════════════════════════════════════
 
-type RangeKey = "today" | "week" | "month" | "custom";
+type RangeKey = "today" | "week" | "month" | "year" | "custom";
 
 const RANGE_LABELS: Record<RangeKey, string> = {
   today: "امروز",
   week: "این هفته",
   month: "این ماه",
+  year: "امسال",
   custom: "بازه دلخواه",
 };
 
@@ -109,6 +115,8 @@ function moodLabel(v: number): string {
 // بارگذاری داده‌های داشبورد
 // ══════════════════════════════════════════════════════════════════
 
+const NO_TRADES: Trade[] = [];
+
 interface DashboardData {
   trades: Trade[];
   sessions: AnalysisSession[];
@@ -171,18 +179,27 @@ export default function Dashboard() {
   const tradingTimeMode = useAppStore(s => s.tradingTimeMode);
   const brokerUtcOffsetMinutes = useAppStore(s => s.brokerUtcOffsetMinutes);
   const dashboardMessage = useAppStore(s => s.dashboardMessage);
-  const [data, setData] = useState<DashboardData | null>(null);
+  const [allData, setData] = useState<DashboardData | null>(null);
+  const { scopedTrades: accountTrades } = useAccountAnalyticsScope(allData?.trades ?? []);
+  const data = useMemo<DashboardData | null>(
+    () => allData ? { ...allData, trades: accountTrades } : null,
+    [allData, accountTrades],
+  );
   const [loading, setLoading] = useState(true);
-  const [rangeKey, setRangeKey] = useState<RangeKey>("week");
-  const [customFrom, setCustomFrom] = useState<string>(() => {
-    const d = new Date(); d.setDate(d.getDate() - 30);
-    return d.toISOString().split("T")[0];
-  });
-  const [customTo, setCustomTo] = useState<string>(() => new Date().toISOString().split("T")[0]);
+  const rangeKey = useAppStore(s => s.dashboardRange);
+  const setRangeKey = useAppStore(s => s.setDashboardRange);
+  const customFrom = useAppStore(s => s.dashboardCustomFrom);
+  const setCustomFrom = useAppStore(s => s.setDashboardCustomFrom);
+  const customTo = useAppStore(s => s.dashboardCustomTo);
+  const setCustomTo = useAppStore(s => s.setDashboardCustomTo);
   const [exportingBackup, setExportingBackup] = useState(false);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [tradingBoxes, setTradingBoxes] = useState<TradingBox[]>([]);
   const customFromRef = useRef<HTMLInputElement>(null);
+  const changeRange = useCallback((key: RangeKey) => {
+    setRangeKey(key);
+    if (key === "custom") setTimeout(() => customFromRef.current?.focus(), 50);
+  }, [setRangeKey]);
 
   const reload = useCallback(() => {
     loadDashboardData().then(setData).finally(() => setLoading(false));
@@ -205,18 +222,18 @@ export default function Dashboard() {
     const { from, to } = getDateRange(rangeKey);
     return filterTradesByRange(data.trades, from, to);
   }, [data, rangeKey, customFrom, customTo, tradingTimeMode, brokerUtcOffsetMinutes]);
+  // سرمایه‌ی شروع بازه برای درصد Max Drawdown (null اگر سرمایه‌ی اولیه‌ی حساب ثبت نشده باشد)
+  const startEquity = useStartEquity(data?.trades ?? NO_TRADES, rangedTrades);
 
   // ── Stats بازه انتخابی
   const rangedStats = useMemo(() => {
     const closed = rangedTrades.filter(t => t.status === "closed");
-    const wins = closed.filter(t => t.result === "win" || t.result === "partial-win");
-    const withR = closed.filter(t => t.rMultiple != null);
-    const totalPnl = closed.reduce((s, t) => s + (getNetPnl(t) ?? 0), 0);
+    const m = computeMetrics(closed); // موتور واحد: core/metrics/engine.ts
     return {
       total: rangedTrades.length,
-      winRate: closed.length > 0 ? (wins.length / closed.length) * 100 : 0,
-      avgR: withR.length > 0 ? withR.reduce((s, t) => s + (t.rMultiple || 0), 0) / withR.length : null,
-      totalPnl,
+      winRate: m.winRate === null ? 0 : m.winRate * 100,
+      avgR: m.avgR,
+      totalPnl: m.netPnl,
       closedCount: closed.length,
     };
   }, [rangedTrades]);
@@ -236,15 +253,14 @@ export default function Dashboard() {
   // ── Equity curve (۲۰ معامله آخر بسته)
   const equityCurve = useMemo((): PnlPoint[] => {
     if (!data) return [];
-    const closed = [...data.trades.filter(t => t.status === "closed")]
-      .sort((a, b) => (a.closedAt || a.openedAt) - (b.closedAt || b.openedAt))
-      .slice(-20);
-    let cum = 0;
-    return closed.map((t, i) => {
-      const pnl = getNetPnl(t) ?? 0;
-      cum += pnl;
-      return { index: i + 1, symbol: t.symbol, pnl: +pnl.toFixed(2), cumulative: +cum.toFixed(2) };
-    });
+    return computePnlCurve(data.trades.filter(t => t.status === "closed"))
+      .slice(-20)
+      .map((point, i) => ({
+        index: i + 1,
+        symbol: point.symbol,
+        pnl: +point.pnl.toFixed(2),
+        cumulative: +point.cumulative.toFixed(2),
+      }));
   }, [data, tradingTimeMode, brokerUtcOffsetMinutes]);
 
   // ── Insights (فقط اگه داده کافی باشه)
@@ -288,24 +304,16 @@ export default function Dashboard() {
     const duration = to - from;
     const prevTrades = filterTradesByRange(data.trades, from - duration, from - 1);
     const closed = prevTrades.filter(t => t.status === "closed");
-    const wins = closed.filter(t => t.result === "win" || t.result === "partial-win");
-    const losses = closed.filter(t => t.result === "loss" || t.result === "partial-loss");
-    const totalWinPnl = wins.reduce((s, t) => s + Math.max(0, getNetPnl(t) ?? 0), 0);
-    const totalLossPnl = Math.abs(losses.reduce((s, t) => s + Math.min(0, getNetPnl(t) ?? 0), 0));
-    const withR = closed.filter(t => t.rMultiple != null);
-    const winRs = wins.filter(t => t.rMultiple != null).map(t => t.rMultiple!);
-    const lossRs = losses.filter(t => t.rMultiple != null).map(t => Math.abs(t.rMultiple!));
-    const avgWinR = winRs.length ? winRs.reduce((s, v) => s + v, 0) / winRs.length : null;
-    const avgLossR = lossRs.length ? lossRs.reduce((s, v) => s + v, 0) / lossRs.length : null;
+    const m = computeMetrics(closed); // موتور واحد: core/metrics/engine.ts
     return {
       closedCount: closed.length,
-      winRate: closed.length > 0 ? (wins.length / closed.length) * 100 : 0,
-      totalPnl: closed.reduce((s, t) => s + (getNetPnl(t) ?? 0), 0),
-      avgR: withR.length ? withR.reduce((s, t) => s + (t.rMultiple ?? 0), 0) / withR.length : null,
-      profitFactor: totalLossPnl > 0 ? totalWinPnl / totalLossPnl : null,
-      avgWinPnl: wins.length ? totalWinPnl / wins.length : null,
-      avgLossPnl: losses.length ? -(totalLossPnl / losses.length) : null,
-      rr: avgWinR != null && avgLossR != null && avgLossR > 0 ? avgWinR / avgLossR : null,
+      winRate: m.winRate === null ? 0 : m.winRate * 100,
+      totalPnl: m.netPnl,
+      avgR: m.avgR,
+      profitFactor: m.profitFactor,
+      avgWinPnl: m.avgWinPnl,
+      avgLossPnl: m.avgLossPnl,
+      rr: m.avgWinR !== null && m.avgLossR !== null && m.avgLossR < 0 ? m.avgWinR / Math.abs(m.avgLossR) : null,
     };
   }, [data, rangeKey]);
 
@@ -313,22 +321,14 @@ export default function Dashboard() {
   const extendedStats = useMemo(() => {
     const closed = rangedTrades.filter(t => t.status === "closed");
     if (!closed.length) return null;
-    const wins   = closed.filter(t => t.result === "win" || t.result === "partial-win");
-    const losses = closed.filter(t => t.result === "loss" || t.result === "partial-loss");
-    const totalWinPnl  = wins.reduce((s, t) => s + Math.max(0, getNetPnl(t) ?? 0), 0);
-    const totalLossPnl = Math.abs(losses.reduce((s, t) => s + Math.min(0, getNetPnl(t) ?? 0), 0));
-    const winRs  = wins.filter(t => t.rMultiple != null).map(t => t.rMultiple!);
-    const lossRs = losses.filter(t => t.rMultiple != null).map(t => Math.abs(t.rMultiple!));
-    const avgWinR  = winRs.length  ? winRs.reduce((s, v) => s + v, 0)  / winRs.length  : null;
-    const avgLossR = lossRs.length ? lossRs.reduce((s, v) => s + v, 0) / lossRs.length : null;
-    const pnls = closed.map(t => getNetPnl(t) ?? 0);
+    const m = computeMetrics(closed); // موتور واحد: core/metrics/engine.ts
     return {
-      bestPnl:      Math.max(...pnls),
-      worstPnl:     Math.min(...pnls),
-      avgWinPnl:    wins.length   ? totalWinPnl  / wins.length   : null,
-      avgLossPnl:   losses.length ? -(totalLossPnl / losses.length) : null,
-      profitFactor: totalLossPnl > 0 ? totalWinPnl / totalLossPnl : null,
-      rr:           avgWinR != null && avgLossR != null && avgLossR > 0 ? avgWinR / avgLossR : null,
+      bestPnl:      m.bestPnl,
+      worstPnl:     m.worstPnl,
+      avgWinPnl:    m.avgWinPnl,
+      avgLossPnl:   m.avgLossPnl,
+      profitFactor: m.profitFactor,
+      rr:           m.avgWinR !== null && m.avgLossR !== null && m.avgLossR < 0 ? m.avgWinR / Math.abs(m.avgLossR) : null,
     };
   }, [rangedTrades]);
 
@@ -338,19 +338,18 @@ export default function Dashboard() {
     const allClosed = data.trades.filter(t => t.status === "closed");
 
     // ماهانه P/L
-    const monthMap = new Map<string, number>();
-    allClosed.forEach(t => {
-      const key = getTradingMonthKey(t.closedAt ?? t.openedAt);
-      monthMap.set(key, (monthMap.get(key) ?? 0) + (getNetPnl(t) ?? 0));
-    });
+    const monthGroups = computeMetricsBy(
+      allClosed.filter(t => getNetPnl(t) !== null),
+      t => getTradingMonthKey(t.closedAt ?? t.openedAt),
+    );
     const FA_MONTHS = ["ژانویه","فوریه","مارس","آوریل","مه","ژوئن","ژوئیه","آگوست","سپتامبر","اکتبر","نوامبر","دسامبر"];
-    const monthlyPnl = [...monthMap.entries()]
-      .sort(([a], [b]) => a.localeCompare(b))
+    const monthlyPnl = monthGroups
+      .sort((a, b) => String(a.key).localeCompare(String(b.key)))
       .slice(-12)
-      .map(([key, pnl]) => ({
-        name: FA_MONTHS[parseInt(key.split("-")[1]) - 1] ?? key,
-        pnl:  +pnl.toFixed(2),
-        fill: pnl >= 0 ? "#22c55e" : "#ef4444",
+      .map(({ key, metrics }) => ({
+        name: FA_MONTHS[parseInt(String(key).split("-")[1]) - 1] ?? String(key),
+        pnl:  +metrics.netPnl.toFixed(2),
+        fill: metrics.netPnl >= 0 ? "#22c55e" : "#ef4444",
       }));
 
     // روزهای هفته
@@ -459,7 +458,7 @@ export default function Dashboard() {
               <Plus className="w-5 h-5" /> ایجاد اولین استراتژی
             </Button>
           </Link>
-          <Link href="/journal/trades/new">
+          <Link href="/journal/sessions">
             <Button size="lg" variant="outline" className="gap-2">
               <PenLine className="w-5 h-5" /> ثبت اولین معامله
             </Button>
@@ -495,14 +494,14 @@ export default function Dashboard() {
         </div>
         {/* دکمه‌های اصلی */}
         <div className="flex gap-2 shrink-0">
-          <Link href="/analysis/new">
+          <Link href="/journal/sessions">
             <Button className="gap-2">
               <ActivitySquare className="w-4 h-4" />
-              <span className="hidden sm:inline">شروع تحلیل جدید</span>
-              <span className="sm:hidden">تحلیل</span>
+              <span className="hidden sm:inline">شروع سشن معاملاتی</span>
+              <span className="sm:hidden">سشن جدید</span>
             </Button>
           </Link>
-          <Link href="/journal/trades/new">
+          <Link href="/journal/sessions">
             <Button variant="secondary" className="gap-2">
               <Plus className="w-4 h-4" />
               <span className="hidden sm:inline">ثبت معامله</span>
@@ -511,6 +510,20 @@ export default function Dashboard() {
           </Link>
         </div>
       </div>
+
+      {/* ━━━━━━━━━━━━━━━━ 1b. نمای کلی (KPI، Equity، توزیع) — فاز ۳ ━━━━━━━━━━━━━━━━ */}
+      <DashboardOverview
+        trades={rangedTrades}
+        startBalance={startEquity}
+        strategyName={(id) => stratMap.get(id) ?? "استراتژی نامشخص"}
+        range={rangeKey}
+        onRangeChange={changeRange}
+        prev={prevRangedStats ? {
+          winRate: prevRangedStats.closedCount > 0 ? prevRangedStats.winRate : null,
+          profitFactor: prevRangedStats.profitFactor,
+          closedCount: prevRangedStats.closedCount,
+        } : null}
+      />
 
       {/* ━━━━━━━━━━━━━━━━ 2. تحلیل‌های نیمه‌کاره ━━━━━━━━━━━━━━━━ */}
       {inProgressSessions.length > 0 && (
@@ -609,31 +622,24 @@ export default function Dashboard() {
           </CardContent>
         </Card>
 
-        {/* شروع تحلیل جدید */}
+        {/* شروع سشن معاملاتی */}
         <Card className="flex flex-col justify-between bg-gradient-to-br from-primary/10 to-primary/5 border-primary/20">
           <CardContent className="p-6 flex flex-col h-full justify-between gap-4">
             <div>
               <div className="w-12 h-12 rounded-2xl bg-primary/20 flex items-center justify-center mb-4">
                 <ActivitySquare className="w-6 h-6 text-primary" />
               </div>
-              <h3 className="text-lg font-bold">شروع تحلیل جدید</h3>
+              <h3 className="text-lg font-bold">شروع سشن معاملاتی</h3>
               <p className="text-sm text-muted-foreground mt-1">
-                استراتژی خود را انتخاب کن و تحلیل گام‌به‌گام را شروع کن.
+                تحلیل تایم‌فریم‌های بالاتر و چند معاملهٔ ورود را در یک روز معاملاتی کنار هم ثبت کنید.
               </p>
             </div>
             <div className="flex gap-2">
-              <Link href="/analysis/new" className="flex-1">
+              <Link href="/journal/sessions" className="flex-1">
                 <Button className="w-full gap-2">
-                  <Plus className="w-4 h-4" /> شروع تحلیل
+                  <Plus className="w-4 h-4" /> شروع سشن
                 </Button>
               </Link>
-              {lastUsedStrategy && (
-                <Link href={`/analysis/new?strategyId=${lastUsedStrategy.strategy.id}`}>
-                  <Button variant="outline" size="icon" title="شروع با آخرین استراتژی">
-                    <Zap className="w-4 h-4" />
-                  </Button>
-                </Link>
-              )}
             </div>
           </CardContent>
         </Card>
@@ -651,7 +657,7 @@ export default function Dashboard() {
               {(Object.entries(RANGE_LABELS) as [RangeKey, string][]).map(([key, label]) => (
                 <button
                   key={key}
-                  onClick={() => { setRangeKey(key); if (key === "custom") setTimeout(() => customFromRef.current?.focus(), 50); }}
+                  onClick={() => changeRange(key)}
                   className={`px-3 py-1 rounded-md text-xs font-medium transition-all ${
                     rangeKey === key
                       ? "bg-background shadow text-foreground"
@@ -713,6 +719,7 @@ export default function Dashboard() {
               <StatCard
                 label="میانگین R"
                 value={rangedStats.avgR != null ? `${rangedStats.avgR.toFixed(2)}R` : "—"}
+                hint="میانگین حسابی R معاملات بستهٔ دارای مقدار R ثبت‌شده"
                 valueClass={
                   rangedStats.avgR == null ? undefined
                   : rangedStats.avgR >= 0 ? "text-emerald-500"
@@ -731,14 +738,14 @@ export default function Dashboard() {
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
             <KpiCard
               label="بهترین معامله"
-              value={`${extendedStats.bestPnl >= 0 ? "+" : ""}${extendedStats.bestPnl.toFixed(2)}`}
-              valueClass={extendedStats.bestPnl >= 0 ? "text-emerald-500" : "text-rose-500"}
+              value={extendedStats.bestPnl === null ? "—" : `${extendedStats.bestPnl >= 0 ? "+" : ""}${extendedStats.bestPnl.toFixed(2)}`}
+              valueClass={extendedStats.bestPnl === null ? "" : extendedStats.bestPnl >= 0 ? "text-emerald-500" : "text-rose-500"}
               hint="بالاترین سود در بازه"
             />
             <KpiCard
               label="بدترین معامله"
-              value={`${extendedStats.worstPnl >= 0 ? "+" : ""}${extendedStats.worstPnl.toFixed(2)}`}
-              valueClass={extendedStats.worstPnl < 0 ? "text-rose-500" : "text-emerald-500"}
+              value={extendedStats.worstPnl === null ? "—" : `${extendedStats.worstPnl >= 0 ? "+" : ""}${extendedStats.worstPnl.toFixed(2)}`}
+              valueClass={extendedStats.worstPnl === null ? "" : extendedStats.worstPnl < 0 ? "text-rose-500" : "text-emerald-500"}
               hint="بزرگ‌ترین ضرر در بازه"
             />
             <KpiCard
@@ -796,9 +803,9 @@ export default function Dashboard() {
             {accounts.map(acc => {
               const accTrades = (data?.trades ?? []).filter((t: any) => t.accountId === acc.id);
               const closed = accTrades.filter(t => t.status === 'closed');
-              const wins = closed.filter(t => t.result === 'win' || t.result === 'partial-win');
-              const pnl = closed.reduce((s, t) => s + (getNetPnl(t) ?? 0), 0);
-              const winRate = closed.length > 0 ? Math.round((wins.length / closed.length) * 100) : null;
+              const am = computeMetrics(closed);
+              const pnl = am.netPnl;
+              const winRate = am.winRate === null ? null : Math.round(am.winRate * 100);
               return (
                 <Link key={acc.id} href={`/journal/trades?accountId=${acc.id}`}>
                   <div className="flex items-center gap-3 p-3 rounded-xl border bg-card hover:bg-muted/30 transition-colors cursor-pointer">
@@ -840,11 +847,11 @@ export default function Dashboard() {
             {tradingBoxes.filter(b => b.status === 'active').map(box => {
               const boxTrades = (data?.trades ?? []).filter((t: any) => t.boxId === box.id);
               const closed = boxTrades.filter(t => t.status === 'closed');
-              const wins = closed.filter(t => t.result === 'win' || t.result === 'partial-win');
-              const pnl = closed.reduce((s, t) => s + (getNetPnl(t) ?? 0), 0);
+              const bm = computeMetrics(closed);
+              const pnl = bm.netPnl;
               const targetCount = box.targetTradeCount || 0;
               const progress = targetCount > 0 ? Math.min(100, Math.round((boxTrades.length / targetCount) * 100)) : null;
-              const winRate = closed.length > 0 ? Math.round((wins.length / closed.length) * 100) : null;
+              const winRate = bm.winRate === null ? null : Math.round(bm.winRate * 100);
               return (
                 <Link key={box.id} href={`/journal/trades?boxId=${box.id}`}>
                   <div className="p-3 rounded-xl border bg-card hover:bg-muted/30 transition-colors cursor-pointer space-y-2">
@@ -893,7 +900,7 @@ export default function Dashboard() {
           </CardHeader>
           <CardContent className="flex-1">
             {recentTrades.length === 0 ? (
-              <EmptyState icon={TrendingDown} text="هنوز معامله‌ای ثبت نشده است." cta="ثبت اولین معامله" href="/journal/trades/new" />
+              <EmptyState icon={TrendingDown} text="هنوز معامله‌ای ثبت نشده است." cta="ثبت اولین معامله" href="/journal/sessions" />
             ) : (
               <div className="space-y-2">
                 {recentTrades.map(trade => (
@@ -1318,7 +1325,7 @@ export default function Dashboard() {
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2">
             {[
               { icon: ActivitySquare, label: "تحلیل جدید",     href: "/analysis/new" },
-              { icon: Plus,           label: "ثبت معامله",     href: "/journal/trades/new" },
+              { icon: Plus,           label: "ثبت معامله",     href: "/journal/sessions" },
               { icon: PenLine,        label: "ژورنال امروز",   href: "/journal/daily/new" },
               { icon: TrendingUp,     label: "معاملات",        href: "/journal/trades" },
               { icon: BarChart3,      label: "گزارش‌ها",       href: "/reports" },
@@ -1394,14 +1401,15 @@ function KpiCard({
   );
 }
 
-function StatCard({ label, value, sub, valueClass }: {
-  label: string; value: string; sub?: string; valueClass?: string;
+function StatCard({ label, value, sub, hint, valueClass }: {
+  label: string; value: string; sub?: string; hint?: string; valueClass?: string;
 }) {
   return (
     <div className="p-3 rounded-xl border bg-card/50 space-y-1">
       <p className="text-xs text-muted-foreground">{label}</p>
       <p className={`text-xl font-bold ${valueClass ?? ""}`}>{value}</p>
       {sub && <p className="text-xs text-muted-foreground">{sub}</p>}
+      {hint && <p className="text-[11px] text-muted-foreground">{hint}</p>}
     </div>
   );
 }

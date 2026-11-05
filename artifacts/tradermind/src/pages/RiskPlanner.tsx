@@ -8,6 +8,9 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../co
 import { Button } from '../components/ui/button';
 import { toast } from 'sonner';
 import { db } from '../db/database';
+import { useAccountAnalyticsSettings } from '../contexts/AccountAnalyticsContext';
+import { getTradingDateKey } from '../lib/tradingTime';
+import { computeMetrics } from '../core/metrics/engine';
 import { calculatePreTradeRisk, getPreTradeBriefing } from '../services/riskService';
 import type { RiskProfileData } from '../services/riskService';
 
@@ -44,6 +47,7 @@ function MetricCard({ label, value, sub, highlight }: { label: string; value: st
 // Main Component
 // ─────────────────────────────────────────────────────────────────
 export default function RiskPlanner() {
+  const { selectedAccount, selectedAccountId } = useAccountAnalyticsSettings();
   const [profile, setProfile] = useState<RiskProfileData | null>(null);
 
   // Calculator inputs
@@ -68,13 +72,23 @@ export default function RiskPlanner() {
       }
     });
     // Pre-trade briefing
-    db.trades.toArray().then(trades => {
+    db.trades.toArray().then(allTrades => {
+      const trades = selectedAccountId
+        ? allTrades.filter(trade => trade.accountId === selectedAccountId)
+        : [];
       db.table('riskProfiles').get('default').then((p: RiskProfileData | undefined) => {
-        const today = new Date().toISOString().slice(0, 10);
-        setBriefingData(getPreTradeBriefing(trades, p ?? null, today, null, null));
+        const currentBalance = selectedAccount?.initialBalance == null
+          ? null
+          : selectedAccount.initialBalance + computeMetrics(trades).netPnl;
+        const accountProfile = p
+          ? { ...p, accountEquity: currentBalance, accountBalance: currentBalance }
+          : null;
+        if (currentBalance !== null) setEquity(String(currentBalance));
+        const today = getTradingDateKey(Date.now());
+        setBriefingData(getPreTradeBriefing(trades, accountProfile, today, null, null));
       });
     });
-  }, []);
+  }, [selectedAccount, selectedAccountId]);
 
   const calc = calculatePreTradeRisk({
     accountEquity: equity ? parseFloat(equity) : null,
@@ -163,8 +177,8 @@ export default function RiskPlanner() {
               </div>
               <div className="space-y-0.5">
                 <p className="text-muted-foreground">افت فعلی</p>
-                <p className={`font-semibold tabular-nums ${briefingData.currentDrawdownPct > (briefingData.maxDrawdownLimit ?? 100) * 0.8 ? 'text-amber-500' : ''}`}>
-                  {briefingData.currentDrawdownPct.toFixed(1)}%
+                <p className={`font-semibold tabular-nums ${briefingData.currentDrawdownPct !== null && briefingData.currentDrawdownPct > (briefingData.maxDrawdownLimit ?? 100) * 0.8 ? 'text-amber-500' : ''}`}>
+                  {briefingData.currentDrawdownPct !== null ? `${briefingData.currentDrawdownPct.toFixed(1)}%` : '—'}
                 </p>
               </div>
             </div>

@@ -11,6 +11,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { db, KnowledgeNote, KnowledgeCategory, NoteImportance } from '../db/database';
 import { insightsService, AutoInsight } from '../services/insightsService';
+import { useAppStore } from '../store/useAppStore';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
@@ -358,6 +359,7 @@ function NoteDialog({ open, editNote, onClose, onSave }: NoteDialogProps) {
 // ── صفحه اصلی ─────────────────────────────────────────────────────────────
 
 export default function TradeInsights() {
+  const selectedAccountId = useAppStore(state => state.analyticsAccountId);
   const { toast } = useToast();
 
   // ── state: نکات دستی ─────────────────────────────
@@ -458,7 +460,7 @@ export default function TradeInsights() {
   const generateInsights = async () => {
     setInsightsLoading(true);
     try {
-      const result = await insightsService.generateAutoInsights();
+      const result = await insightsService.generateAutoInsights(selectedAccountId);
       setInsights(result);
       setInsightsGenerated(true);
     } finally {

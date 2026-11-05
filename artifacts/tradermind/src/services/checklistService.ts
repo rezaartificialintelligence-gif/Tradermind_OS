@@ -1,3 +1,5 @@
+import { runAsRemote } from '../db/syncSupport';
+import { DEFAULT_CHECKLIST_ID } from '../db/defaultIds';
 /**
  * checklistService — Prompt 26
  * Pre-trade checklist & daily focus/intention/reflection management.
@@ -82,14 +84,17 @@ export const checklistService = {
   async ensureDefaultChecklist(): Promise<PreTradeChecklist> {
     const existing = await checklistService.getDefaultChecklist();
     if (existing) return existing;
-    return checklistService.createChecklist({
+    const checklist: PreTradeChecklist = {
+      id: DEFAULT_CHECKLIST_ID,
       name: 'چک‌لیست پیش از معامله',
       contextSymbol: '', contextSession: '', contextSetup: '',
       isDefault: true,
-      items: JSON.stringify(
-        STARTER_ITEMS.map(item => ({ ...item, id: crypto.randomUUID() }))
-      ),
-    });
+      items: JSON.stringify(STARTER_ITEMS.map(item => ({ ...item, id: crypto.randomUUID() }))),
+      createdAt: Date.now(),
+      updatedAt: 0,
+    };
+    await runAsRemote(() => db.preTradeChecklists.add(checklist));
+    return checklist;
   },
 
   // ── Items ─────────────────────────────────────────────────────────

@@ -4,17 +4,30 @@ import { persist } from 'zustand/middleware';
 // ─────────────────────────────────────────────
 // انواع
 // ─────────────────────────────────────────────
-export type ThemeMode = 'light' | 'dark' | 'system';
+export type ThemeMode = 'light' | 'dark' | 'neon' | 'system';
 export type FontSize = 'xs' | 'sm' | 'md' | 'lg' | 'xl';
-export type ColorTheme = 'blue' | 'violet' | 'emerald' | 'amber' | 'rose';
+export type ColorTheme = 'blue' | 'violet' | 'emerald' | 'amber' | 'rose' | 'cyan' | 'orange' | 'pink' | 'teal' | 'indigo';
 export type TextColor = 'auto' | `#${string}`;
 export type Language = 'fa'; // در آینده: | 'en'
 export type TradingTimeMode = 'device' | 'broker';
+export type DashboardRange = 'today' | 'week' | 'month' | 'year' | 'custom';
+
+const toLocalDateKey = (date: Date) => {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 10);
+};
+const dashboardDefaultTo = toLocalDateKey(new Date());
+const dashboardDefaultFromDate = new Date();
+dashboardDefaultFromDate.setDate(dashboardDefaultFromDate.getDate() - 30);
 
 export interface AppSettings {
   // ظاهر
   theme: ThemeMode;
   fontSize: FontSize;
+  /** شفافیت/blur سطوح شیشه‌ای؛ خاموش = سطح مات (سبک‌تر برای دستگاه‌های ضعیف) */
+  glassEffects: boolean;
+  /** انیمیشن‌ها و جابه‌جایی‌های نرم رابط */
+  softAnimations: boolean;
   colorTheme: ColorTheme;
   textColor: TextColor;
   language: Language;
@@ -27,6 +40,8 @@ export interface AppSettings {
 
   // پیش‌فرض‌های ثبت معامله
   defaultAccountId: string | null;
+  /** حساب انتخاب‌شده برای صفحات تحلیل: id حساب | '__combined__' (همه، ترکیبی؛ پیش‌فرض) | null (همه، جداگانه) */
+  analyticsAccountId: string | null;
   defaultTradingBoxId: string | null;
   defaultSymbol: string;
   defaultMarket: string;
@@ -44,10 +59,14 @@ export interface AppSettings {
 
   // تنظیمات ژورنال
   journalAutosave: boolean;
+  tradeAutosave: boolean;
   journalCustomTags: string[];
   journalCustomEmotions: string[];
 
   // داشبورد
+  dashboardRange: DashboardRange;
+  dashboardCustomFrom: string;
+  dashboardCustomTo: string;
   dashShowTrades: boolean;
   dashShowWinRate: boolean;
   dashShowPnl: boolean;
@@ -63,11 +82,14 @@ interface AppActions {
   toggleSidebar: () => void;
   setTheme: (theme: ThemeMode) => void;
   setFontSize: (size: FontSize) => void;
+  setGlassEffects: (v: boolean) => void;
+  setSoftAnimations: (v: boolean) => void;
   setColorTheme: (theme: ColorTheme) => void;
   setTextColor: (color: TextColor) => void;
   setLanguage: (lang: Language) => void;
   setAppName: (name: string) => void;
   setDefaultAccountId: (id: string | null) => void;
+  setAnalyticsAccountId: (id: string | null) => void;
   setDefaultTradingBoxId: (id: string | null) => void;
   setDefaultSymbol: (symbol: string) => void;
   setDefaultMarket: (market: string) => void;
@@ -81,6 +103,7 @@ interface AppActions {
   setAnalysisProgressBar: (v: boolean) => void;
   // ژورنال
   setJournalAutosave: (v: boolean) => void;
+  setTradeAutosave: (v: boolean) => void;
   addJournalTag: (tag: string) => void;
   removeJournalTag: (tag: string) => void;
   addJournalEmotion: (emotion: string) => void;
@@ -93,6 +116,9 @@ interface AppActions {
   setDashShowRecentTrades: (v: boolean) => void;
   setDashShowLastJournal: (v: boolean) => void;
   setDashShowAdherence: (v: boolean) => void;
+  setDashboardRange: (range: DashboardRange) => void;
+  setDashboardCustomFrom: (date: string) => void;
+  setDashboardCustomTo: (date: string) => void;
   setDashboardMessage: (message: string) => void;
   // ریست
   resetToDefaults: () => void;
@@ -104,12 +130,15 @@ interface AppActions {
 const defaults: AppSettings = {
   theme: 'dark',
   fontSize: 'md',
+  glassEffects: true,
+  softAnimations: true,
   colorTheme: 'blue',
   textColor: 'auto',
   language: 'fa',
   sidebarOpen: false,
   appName: 'TraderMind',
   defaultAccountId: null,
+  analyticsAccountId: '__combined__',
   defaultTradingBoxId: null,
   defaultSymbol: 'XAUUSD',
   defaultMarket: 'Commodities',
@@ -123,9 +152,13 @@ const defaults: AppSettings = {
   analysisProgressBar: true,
   // ژورنال
   journalAutosave: true,
+  tradeAutosave: false,
   journalCustomTags: [],
   journalCustomEmotions: [],
   // داشبورد
+  dashboardRange: 'week',
+  dashboardCustomFrom: toLocalDateKey(dashboardDefaultFromDate),
+  dashboardCustomTo: dashboardDefaultTo,
   dashShowTrades: true,
   dashShowWinRate: true,
   dashShowPnl: true,
@@ -148,11 +181,14 @@ export const useAppStore = create<AppSettings & AppActions>()(
       toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
       setTheme: (theme) => set({ theme }),
       setFontSize: (fontSize) => set({ fontSize }),
+      setGlassEffects: (glassEffects) => set({ glassEffects }),
+      setSoftAnimations: (softAnimations) => set({ softAnimations }),
       setColorTheme: (colorTheme) => set({ colorTheme }),
       setTextColor: (textColor) => set({ textColor }),
       setLanguage: (language) => set({ language }),
       setAppName: (appName) => set({ appName }),
       setDefaultAccountId: (defaultAccountId) => set({ defaultAccountId }),
+      setAnalyticsAccountId: (analyticsAccountId) => set({ analyticsAccountId }),
       setDefaultTradingBoxId: (defaultTradingBoxId) => set({ defaultTradingBoxId }),
       setDefaultSymbol: (defaultSymbol) => set({ defaultSymbol }),
       setDefaultMarket: (defaultMarket) => set({ defaultMarket }),
@@ -169,6 +205,7 @@ export const useAppStore = create<AppSettings & AppActions>()(
       setAnalysisProgressBar: (v) => set({ analysisProgressBar: v }),
 
       setJournalAutosave: (v) => set({ journalAutosave: v }),
+      setTradeAutosave: (v) => set({ tradeAutosave: v }),
       addJournalTag: (tag) =>
         set((s) => ({ journalCustomTags: [...new Set([...s.journalCustomTags, tag.trim()])] })),
       removeJournalTag: (tag) =>
@@ -185,6 +222,9 @@ export const useAppStore = create<AppSettings & AppActions>()(
       setDashShowRecentTrades: (v) => set({ dashShowRecentTrades: v }),
       setDashShowLastJournal: (v) => set({ dashShowLastJournal: v }),
       setDashShowAdherence: (v) => set({ dashShowAdherence: v }),
+      setDashboardRange: (dashboardRange) => set({ dashboardRange }),
+      setDashboardCustomFrom: (dashboardCustomFrom) => set({ dashboardCustomFrom }),
+      setDashboardCustomTo: (dashboardCustomTo) => set({ dashboardCustomTo }),
       setDashboardMessage: (dashboardMessage) => set({ dashboardMessage: dashboardMessage.slice(0, 240) }),
 
       // وضعیت باز بودن منوی موبایل موقتی است و نباید بین اجراهای برنامه
@@ -201,20 +241,33 @@ export const useAppStore = create<AppSettings & AppActions>()(
         ...persisted,
         sidebarOpen: false,
         // backward compat: اگر theme قدیمی بود، معتبر باشد
-        theme: ['light', 'dark', 'system'].includes(persisted?.theme)
+        theme: ['light', 'dark', 'neon', 'system'].includes(persisted?.theme)
           ? persisted.theme
           : defaults.theme,
         fontSize: ['xs', 'sm', 'md', 'lg', 'xl'].includes(persisted?.fontSize)
           ? persisted.fontSize
           : defaults.fontSize,
-        colorTheme: ['blue', 'violet', 'emerald', 'amber', 'rose'].includes(persisted?.colorTheme)
+        colorTheme: ['blue', 'violet', 'emerald', 'amber', 'rose', 'cyan', 'orange', 'pink', 'teal', 'indigo'].includes(persisted?.colorTheme)
           ? persisted.colorTheme
           : defaults.colorTheme,
+        dashboardRange: ['today', 'week', 'month', 'year', 'custom'].includes(persisted?.dashboardRange)
+          ? persisted.dashboardRange
+          : defaults.dashboardRange,
+        dashboardCustomFrom: typeof persisted?.dashboardCustomFrom === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(persisted.dashboardCustomFrom)
+          ? persisted.dashboardCustomFrom
+          : defaults.dashboardCustomFrom,
+        dashboardCustomTo: typeof persisted?.dashboardCustomTo === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(persisted.dashboardCustomTo)
+          ? persisted.dashboardCustomTo
+          : defaults.dashboardCustomTo,
+        tradeAutosave: typeof persisted?.tradeAutosave === 'boolean'
+          ? persisted.tradeAutosave
+          : defaults.tradeAutosave,
         textColor: persisted?.textColor === 'auto'
           || (typeof persisted?.textColor === 'string' && /^#[0-9a-f]{6}$/i.test(persisted.textColor))
           ? persisted.textColor
           : defaults.textColor,
         defaultAccountId: typeof persisted?.defaultAccountId === 'string' ? persisted.defaultAccountId : defaults.defaultAccountId,
+        analyticsAccountId: typeof persisted?.analyticsAccountId === 'string' ? persisted.analyticsAccountId : defaults.analyticsAccountId,
         defaultTradingBoxId: typeof persisted?.defaultTradingBoxId === 'string' ? persisted.defaultTradingBoxId : defaults.defaultTradingBoxId,
         defaultSymbol: typeof persisted?.defaultSymbol === 'string' ? persisted.defaultSymbol : defaults.defaultSymbol,
         defaultMarket: typeof persisted?.defaultMarket === 'string' ? persisted.defaultMarket : defaults.defaultMarket,

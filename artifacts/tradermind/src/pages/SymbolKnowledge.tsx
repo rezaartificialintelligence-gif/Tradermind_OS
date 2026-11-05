@@ -11,6 +11,7 @@ import {
   CheckCircle2, XCircle, GitCompare, Brain
 } from 'lucide-react';
 import { db } from '../db/database';
+import { useAccountAnalyticsScope } from '../contexts/AccountAnalyticsContext';
 import {
   computeSymbolProfile, SymbolBehaviorProfile, FibStat,
   SessionStat, RegimeStat, TemporalStat, ConfidenceLevel,
@@ -478,7 +479,8 @@ export default function SymbolKnowledge() {
   const [, params] = useRoute('/symbols/:symbol');
   const symbol = params?.symbol ? decodeURIComponent(params.symbol) : '';
 
-  const [trades, setTrades] = useState<import('../db/database').Trade[]>([]);
+  const [loadedTrades, setTrades] = useState<import('../db/database').Trade[]>([]);
+  const { scopedTrades: trades } = useAccountAnalyticsScope(loadedTrades);
   useEffect(() => { db.trades.toArray().then(setTrades); }, []);
   const [tab, setTab] = useState('overview');
 

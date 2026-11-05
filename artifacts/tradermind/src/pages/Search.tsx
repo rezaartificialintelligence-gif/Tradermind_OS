@@ -6,6 +6,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useLocation } from 'wouter';
+import { consumePendingSearch } from '../lib/pendingSearch';
 import { db } from '../db/database';
 import { Card, CardContent } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -77,7 +78,7 @@ const TYPE_ICONS: Record<ResultType, React.ElementType> = {
 
 export default function SearchPage() {
   const [, setLocation] = useLocation();
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(() => consumePendingSearch());
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState<FilterType>('all');

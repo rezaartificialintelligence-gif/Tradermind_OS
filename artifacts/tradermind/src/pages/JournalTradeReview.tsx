@@ -10,6 +10,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../co
 import { Input } from '../components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Textarea } from '../components/ui/textarea';
+import { TradeExcursionCard } from '../components/journal/TradeExcursionCard';
+import { SessionAnalysisPanel } from '../components/journal/SessionAnalysisPanel';
 
 type PsychologyPhase = { optionIds: string[]; intensity: number };
 type Psychology = { before: PsychologyPhase; during: PsychologyPhase; after: PsychologyPhase };
@@ -80,6 +82,7 @@ export default function JournalTradeReview() {
   const [meta, setMeta] = useState<Omit<JournalTradeData, 'id' | 'createdAt' | 'updatedAt'> | null>(null);
   const [sessionTitle, setSessionTitle] = useState('');
   const [options, setOptions] = useState<JournalOption[]>([]);
+  const [hiddenCats, setHiddenCats] = useState<ReadonlySet<string>>(() => new Set());
   const [rules, setRules] = useState<Array<{ id: string; title: string }>>([]);
   const [media, setMedia] = useState<JournalMedia[]>([]);
   const [fileCategory, setFileCategory] = useState<JournalMedia['category']>('review');
@@ -97,7 +100,7 @@ export default function JournalTradeReview() {
         setLocation('/journal/trades');
         return;
       }
-      const [session, version, previous, allOptions, attachments, currentTrigger] = await Promise.all([
+      const [session, version, previous, allOptions, attachments, currentTrigger, hiddenIds] = await Promise.all([
         db.journalSessions.get(found.journalSessionId),
         db.strategyVersions.get((await db.journalSessions.get(found.journalSessionId))?.strategyVersionId ?? ''),
         db.journalTradeData.where('tradeId').equals(found.id).first(),
@@ -106,6 +109,7 @@ export default function JournalTradeReview() {
         found.journalTriggerEventId
           ? db.journalTriggerEvents.get(found.journalTriggerEventId)
           : Promise.resolve(undefined),
+        journalSessionService.getHiddenCategoryIds(),
       ]);
       if (!session) throw new Error('سشن معاملاتی این معامله پیدا نشد.');
       const symbols = parseJournalArray(session.symbols);
@@ -113,6 +117,7 @@ export default function JournalTradeReview() {
       setLinkedTrigger(currentTrigger ?? null);
       setSessionTitle(`${symbols.join(', ') || found.symbol} · ${new Date(session.startTime).toLocaleDateString()}`);
       setOptions(allOptions);
+      setHiddenCats(new Set(hiddenIds));
       setMedia(attachments);
       setMeta(previous
         ? {
@@ -184,7 +189,7 @@ export default function JournalTradeReview() {
   const save = async () => {
     if (!meta || !trade) return;
     const checklist = parseObject<ChecklistResults>(meta.checklistResults, {});
-    const missingRequired = (byCategory.get('checklist') ?? [])
+    const missingRequired = (hiddenCats.has('checklist') ? [] : byCategory.get('checklist') ?? [])
       .filter(option => option.enabled && option.required && !checklist[option.id]);
     if (missingRequired.length) {
       toast.error(`موارد اجباری چک‌لیست را تأیید کنید: ${missingRequired.map(item => item.label).join('، ')}`);
@@ -239,6 +244,7 @@ export default function JournalTradeReview() {
     selected: string[],
     onToggle: (id: string) => void,
   ) => {
+    if (hiddenCats.has(category)) return null;
     const categoryOptions = byCategory.get(category) ?? [];
     return categoryOptions.length ? (
       <div className="grid gap-2 sm:grid-cols-2">
@@ -258,6 +264,7 @@ export default function JournalTradeReview() {
     category: string,
     label: string,
   ) => {
+    if (hiddenCats.has(category)) return null;
     const categoryOptions = byCategory.get(category) ?? [];
     return (
       <label className="space-y-1.5 text-sm">
@@ -292,6 +299,8 @@ export default function JournalTradeReview() {
         </Button>
       </header>
 
+      <SessionAnalysisPanel tradeId={trade.id} journalSessionId={trade.journalSessionId} />
+
       {linkedTrigger && (
         <Card data-testid="card-linked-trigger-details">
           <CardHeader><CardTitle className="text-base">جزئیات فعلی تریگر پیوندخورده</CardTitle></CardHeader>
@@ -320,7 +329,7 @@ export default function JournalTradeReview() {
             {singleOptionSelect('scenarioOutcomeOptionId', 'scenario_outcome', 'نتیجهٔ سناریوی تحلیل')}
           </div>
           <div className="space-y-2"><h2 className="text-sm font-medium">تریگرهای ورود</h2>{multiOptions('entry_trigger', triggerIds, id => selectedList('entryTriggerOptionIds', id))}</div>
-          <div className="space-y-2">
+          {!hiddenCats.has('checklist') && <div className="space-y-2">
             <h2 className="text-sm font-medium">چک‌لیست ورود</h2>
             {(byCategory.get('checklist') ?? []).length === 0 ? <p className="text-xs text-muted-foreground">گزینه‌ای تعریف نشده است.</p> : (
               <div className="grid gap-2 sm:grid-cols-2">
@@ -332,7 +341,7 @@ export default function JournalTradeReview() {
                 ))}
               </div>
             )}
-          </div>
+          </div>}
         </CardContent>
       </Card>
 
@@ -399,6 +408,8 @@ export default function JournalTradeReview() {
         </CardContent>
       </Card>
 
+      <TradeExcursionCard trade={trade} onSaved={load} />
+
       <Card>
         <CardHeader><CardTitle className="text-base">روانشناسی</CardTitle></CardHeader>
         <CardContent className="space-y-5">
@@ -425,10 +436,10 @@ export default function JournalTradeReview() {
         </CardContent>
       </Card>
 
-      <Card>
+      {!hiddenCats.has('mistake') && <Card>
         <CardHeader><CardTitle className="text-base">اشتباه‌ها</CardTitle></CardHeader>
         <CardContent>{multiOptions('mistake', mistakeIds, id => selectedList('mistakeOptionIds', id))}</CardContent>
-      </Card>
+      </Card>}
 
       <Card>
         <CardHeader><CardTitle className="text-base">رسانه و فایل‌ها</CardTitle></CardHeader>

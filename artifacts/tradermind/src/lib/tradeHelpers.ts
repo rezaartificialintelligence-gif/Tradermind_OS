@@ -13,19 +13,39 @@
 
 import type { Trade, PostTradeReviewData, BehaviorFlag } from '../db/database';
 import { getTradingDateKey, getTradingMonthKey } from './tradingTime';
+import { mean as avg, stdDev } from '../core/metrics/mathStats';
 
 // ── وضعیت معامله ──────────────────────────────────────────────────────────────
 
 export const isClosed   = (t: Trade): boolean => t.status === 'closed';
 export const isOpen     = (t: Trade): boolean => t.status === 'open';
-export const isWin      = (t: Trade): boolean => t.result === 'win' || t.result === 'partial-win';
-export const isLoss     = (t: Trade): boolean => t.result === 'loss' || t.result === 'partial-loss';
-export const isBreakEven= (t: Trade): boolean => t.result === 'breakeven';
+/**
+ * طبقه‌بندی واحد برد/باخت/سربه‌سر (تنها تعریف برنامه — engine.ts و همه‌ی isWin/isLoss از این استفاده می‌کنند):
+ * علامت سود/زیان «خالص» (پس از کارمزد/کمیسیون/اسپرد)؛ فقط اگر P/L نباشد برچسب result.
+ */
+export type Outcome = 'win' | 'loss' | 'breakeven';
+const OUTCOME_EPS = 1e-9;
+export const getOutcome = (t: Trade): Outcome | null => {
+  const net = getNetPnl(t);
+  if (net !== null && Number.isFinite(net)) return net > OUTCOME_EPS ? 'win' : net < -OUTCOME_EPS ? 'loss' : 'breakeven';
+  switch (t.result) {
+    case 'win': case 'partial-win': return 'win';
+    case 'loss': case 'partial-loss': return 'loss';
+    case 'breakeven': return 'breakeven';
+    default: return null;
+  }
+};
+export const isWin      = (t: Trade): boolean => getOutcome(t) === 'win';
+export const isLoss     = (t: Trade): boolean => getOutcome(t) === 'loss';
+export const isBreakEven= (t: Trade): boolean => getOutcome(t) === 'breakeven';
 
 /** سود/زیان خالص پس از کسر کمیسیون، اسپرد و سایر هزینه‌ها. */
 export const getNetPnl = (t: Trade): number | null => {
-  if (t.profitLoss === null || t.profitLoss === undefined) return null;
-  return t.profitLoss - (t.fees ?? 0) - (t.commission ?? 0) - (t.spread ?? 0);
+  if (typeof t.profitLoss !== 'number' || !Number.isFinite(t.profitLoss)) return null;
+  const costs = [t.fees, t.commission, t.spread];
+  if (costs.some(value => value !== null && value !== undefined
+    && (typeof value !== 'number' || !Number.isFinite(value)))) return null;
+  return t.profitLoss - costs.reduce<number>((sum, value) => sum + (value ?? 0), 0);
 };
 
 // ── تاریخ ─────────────────────────────────────────────────────────────────────
@@ -43,24 +63,8 @@ export function toMonthStr(ts: number): string {
 // ── ریاضیات ───────────────────────────────────────────────────────────────────
 
 /** میانگین آرایه اعداد — null اگر خالی باشد */
-export function avg(arr: number[]): number | null {
-  return arr.length > 0 ? arr.reduce((s, v) => s + v, 0) / arr.length : null;
-}
-
-/** انحراف معیار — null اگر کمتر از ۲ عنصر باشد */
-export function stdDev(arr: number[]): number | null {
-  if (arr.length < 2) return null;
-  const m = avg(arr)!;
-  return Math.sqrt(arr.reduce((s, v) => s + (v - m) ** 2, 0) / arr.length);
-}
-
-/** میانه آرایه اعداد — null اگر خالی باشد */
-export function median(arr: number[]): number | null {
-  if (!arr.length) return null;
-  const s = [...arr].sort((a, b) => a - b);
-  const m = Math.floor(s.length / 2);
-  return s.length % 2 === 0 ? (s[m - 1] + s[m]) / 2 : s[m];
-}
+// avg / median / stdDev: تنها پیاده‌سازی در core/metrics/mathStats.ts (stdDev نمونه‌ای n−1)
+export { mean as avg, median, stdDev } from '../core/metrics/mathStats';
 
 /** ضریب تغییرات (پراکندگی نسبی) — null اگر میانگین صفر یا داده کم باشد */
 export function coefficientOfVariation(arr: number[]): number | null {

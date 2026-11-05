@@ -11,6 +11,7 @@ export interface Reminder {
 }
 
 const STORAGE_KEY = 'tradermind-reminders';
+const CUSTOM_SOUND_KEY = 'tradermind-reminder-custom-sound';
 const CHANNEL_ID = 'tradermind-reminders';
 const browserTimers = new Map<string, ReturnType<typeof setTimeout>>();
 let lifecycleBound = false;
@@ -57,31 +58,67 @@ async function showBrowserNotification(reminder: Reminder): Promise<void> {
     }
     if (Notification.permission !== 'granted') return;
 
-    // بعضی نسخه‌های Chrome روی Android و محیط‌های embedded سازنده‌ی
-    // Notification را ندارند و `new Notification()` خطای Illegal constructor
-    // می‌دهد. Service Worker روش استاندارد و سازگار برای اعلان وب موبایل است.
+    let delivered = false;
     if ('serviceWorker' in navigator) {
-      const registration = await navigator.serviceWorker.ready;
-      if (typeof registration.showNotification === 'function') {
+      const registration = await navigator.serviceWorker.getRegistration();
+      if (registration && typeof registration.showNotification === 'function') {
         await registration.showNotification(reminder.title, {
           body: reminder.body || 'یادآور TraderMind',
           tag: `tradermind-reminder-${reminder.id}`,
           dir: 'rtl',
           lang: 'fa',
         });
+        delivered = true;
       }
-      return;
     }
+    // Some desktop browsers have no active service worker; use their
+    // foreground Notification constructor as a fallback.
+    if (!delivered) new Notification(reminder.title, { body: reminder.body || 'یادآور TraderMind', tag: `tradermind-reminder-${reminder.id}` });
   } catch (error) {
     // شکست اعلان نباید رابط کاربری یا زمان‌بندی‌های دیگر را از کار بیندازد.
     console.warn('[TraderMind reminders] Browser notification unavailable', error);
   }
 }
 
+export function getReminderCustomSound(): string | null {
+  try { return localStorage.getItem(CUSTOM_SOUND_KEY); } catch { return null; }
+}
+
+export function setReminderCustomSound(dataUrl: string | null): void {
+  if (!dataUrl) {
+    localStorage.removeItem(CUSTOM_SOUND_KEY);
+    return;
+  }
+  if (!dataUrl.startsWith('data:audio/') || dataUrl.length > 2_000_000) {
+    throw new Error('فایل صوتی باید معتبر و کوچک‌تر از حدود ۱٫۵ مگابایت باشد.');
+  }
+  localStorage.setItem(CUSTOM_SOUND_KEY, dataUrl);
+}
+
+export async function previewReminderCustomSound(): Promise<void> {
+  const dataUrl = getReminderCustomSound();
+  if (!dataUrl) throw new Error('هنوز صدای سفارشی انتخاب نشده است.');
+  const audio = new Audio(dataUrl);
+  await audio.play();
+}
+
+async function playCustomSoundWhileAppIsOpen(): Promise<void> {
+  const dataUrl = getReminderCustomSound();
+  if (!dataUrl) return;
+  try { await new Audio(dataUrl).play(); }
+  catch (error) {
+    console.warn('[TraderMind reminders] Custom sound could not be played in this browser state', error);
+  }
+}
+
 function scheduleBrowserTimer(reminder: Reminder): void {
   const remaining = reminder.scheduledAt - Date.now();
   if (remaining <= 0) {
-    void showBrowserNotification(reminder);
+    void (async () => {
+      await playCustomSoundWhileAppIsOpen();
+      await showBrowserNotification(reminder);
+      write(read().map(item => item.id === reminder.id ? { ...item, enabled: false } : item));
+    })();
     browserTimers.delete(reminder.id);
     return;
   }
@@ -208,6 +245,13 @@ export const reminderService = {
     let changed = false;
     for (const reminder of reminders) {
       if (reminder.enabled && reminder.scheduledAt <= Date.now()) {
+        // Browser timers do not survive a closed tab. Surface an overdue
+        // reminder once when the app returns; native/Electron runtimes have
+        // their own OS scheduler and should not receive a duplicate.
+        if (!Capacitor.isNativePlatform() && !window.electronAPI?.scheduleReminder) {
+          await playCustomSoundWhileAppIsOpen();
+          await showBrowserNotification(reminder);
+        }
         reminder.enabled = false;
         changed = true;
       } else if (reminder.enabled) {

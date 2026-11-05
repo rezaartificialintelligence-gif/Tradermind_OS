@@ -152,11 +152,13 @@ function StatCard({ label, value, sub, color = '' }: { label: string; value: str
 function MentalPerformanceTab() {
   const [data, setData] = useState<MentalPerfData | null>(null);
   const [loading, setLoading] = useState(true);
+  const selectedAccountId = useAppStore(state => state.analyticsAccountId);
 
   useEffect(() => {
     (async () => {
       try {
-        const [trades, journals] = await Promise.all([db.trades.toArray(), db.dailyJournals.toArray()]);
+        const [allTrades, journals] = await Promise.all([db.trades.toArray(), db.dailyJournals.toArray()]);
+        const trades = selectedAccountId ? allTrades.filter(trade => trade.accountId === selectedAccountId) : [];
         setData(analyzeMentalPerformance(trades, journals as DailyJournal[]));
       } catch {
         // DB error — component will render empty state gracefully
@@ -164,7 +166,7 @@ function MentalPerformanceTab() {
         setLoading(false);
       }
     })();
-  }, []);
+  }, [selectedAccountId]);
 
   if (loading) return <LoadingState message="در حال تحلیل حالت ذهنی..." />;
   if (!data || data.journaledDays < 3) {
@@ -284,11 +286,13 @@ function MentalPerformanceTab() {
 function RecurringMistakesTab() {
   const [trends, setTrends] = useState<MistakeTrend[]>([]);
   const [loading, setLoading] = useState(true);
+  const selectedAccountId = useAppStore(state => state.analyticsAccountId);
 
   useEffect(() => {
     (async () => {
       try {
-        const trades = await db.trades.toArray();
+        const allTrades = await db.trades.toArray();
+        const trades = selectedAccountId ? allTrades.filter(trade => trade.accountId === selectedAccountId) : [];
         setTrends(analyzeRecurringMistakeTrends(trades));
       } catch {
         // DB error — component will render empty state gracefully
@@ -296,7 +300,7 @@ function RecurringMistakesTab() {
         setLoading(false);
       }
     })();
-  }, []);
+  }, [selectedAccountId]);
 
   if (loading) return <LoadingState message="در حال تحلیل اشتباهات..." />;
   if (trends.length === 0) {
@@ -430,11 +434,13 @@ function TradingHabitsTab() {
   const [bySession, setBySession] = useState<ReturnType<typeof getBySession>>([]);
   const [overtrading, setOvertrading] = useState<ReturnType<typeof getOvertradingAnalysis> | null>(null);
   const [loading, setLoading] = useState(true);
+  const selectedAccountId = useAppStore(s => s.analyticsAccountId);
 
   useEffect(() => {
     (async () => {
       try {
-        const trades = await db.trades.toArray();
+        const allTrades = await db.trades.toArray();
+        const trades = selectedAccountId ? allTrades.filter(trade => trade.accountId === selectedAccountId) : [];
         setByDay(getByDay(trades));
         setByHour(getByHour(trades));
         setBySession(getBySession(trades));
@@ -445,7 +451,7 @@ function TradingHabitsTab() {
         setLoading(false);
       }
     })();
-  }, [tradingTimeMode, brokerUtcOffsetMinutes]);
+  }, [tradingTimeMode, brokerUtcOffsetMinutes, selectedAccountId]);
 
   if (loading) return <LoadingState message="در حال بارگذاری عادات..." />;
 
@@ -455,10 +461,10 @@ function TradingHabitsTab() {
       desc="برای تحلیل عادات معاملاتی، حداقل ۱۰ معامله بسته نیاز است." />;
   }
 
-  const bestDay  = byDay.length ? [...byDay].filter(d => d.winRate !== null).sort((a, b) => (b.winRate ?? 0) - (a.winRate ?? 0))[0] : null;
-  const worstDay = byDay.length ? [...byDay].filter(d => d.winRate !== null).sort((a, b) => (a.winRate ?? 1) - (b.winRate ?? 1))[0] : null;
-  const bestHour  = byHour.length ? [...byHour].filter(h => h.winRate !== null && h.count >= 2).sort((a, b) => (b.winRate ?? 0) - (a.winRate ?? 0))[0] : null;
-  const worstHour = byHour.length ? [...byHour].filter(h => h.winRate !== null && h.count >= 2).sort((a, b) => (a.winRate ?? 1) - (b.winRate ?? 1))[0] : null;
+  const bestDay = byDay.find(d => d.bestByAvgR) ?? null;
+  const worstDay = byDay.find(d => d.worstByAvgR) ?? null;
+  const bestHour = byHour.find(h => h.bestByAvgR) ?? null;
+  const worstHour = byHour.find(h => h.worstByAvgR) ?? null;
   const bestSess  = bySession.length ? [...bySession].filter(s => s.winRate !== null).sort((a, b) => (b.winRate ?? 0) - (a.winRate ?? 0))[0] : null;
 
   const dayChartData = byDay.map(d => ({
@@ -479,28 +485,28 @@ function TradingHabitsTab() {
           <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3">
             <p className="text-[10px] text-muted-foreground flex items-center gap-1"><TrendingUp className="h-3 w-3" /> بهترین روز</p>
             <p className="font-bold mt-1">{bestDay.dayName}</p>
-            <p className="text-xs text-emerald-400">{pct(bestDay.winRate)} نرخ برد</p>
+            <p className="text-xs text-emerald-400">{bestDay.avgR?.toFixed(2)}R میانگین</p>
           </div>
         )}
         {worstDay && worstDay.dayName !== bestDay?.dayName && (
           <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-3">
             <p className="text-[10px] text-muted-foreground flex items-center gap-1"><TrendingDown className="h-3 w-3" /> بدترین روز</p>
             <p className="font-bold mt-1">{worstDay.dayName}</p>
-            <p className="text-xs text-red-400">{pct(worstDay.winRate)} نرخ برد</p>
+            <p className="text-xs text-red-400">{worstDay.avgR?.toFixed(2)}R میانگین</p>
           </div>
         )}
         {bestHour && (
           <div className="rounded-lg border border-blue-500/20 bg-blue-500/5 p-3">
             <p className="text-[10px] text-muted-foreground flex items-center gap-1"><Clock className="h-3 w-3" /> بهترین ساعت</p>
             <p className="font-bold mt-1">{bestHour.label}</p>
-            <p className="text-xs text-blue-400">{pct(bestHour.winRate)} نرخ برد</p>
+            <p className="text-xs text-blue-400">{bestHour.avgR?.toFixed(2)}R میانگین</p>
           </div>
         )}
         {worstHour && worstHour.label !== bestHour?.label && (
           <div className="rounded-lg border border-orange-500/20 bg-orange-500/5 p-3">
             <p className="text-[10px] text-muted-foreground flex items-center gap-1"><Clock className="h-3 w-3" /> بدترین ساعت</p>
             <p className="font-bold mt-1">{worstHour.label}</p>
-            <p className="text-xs text-orange-400">{pct(worstHour.winRate)} نرخ برد</p>
+            <p className="text-xs text-orange-400">{worstHour.avgR?.toFixed(2)}R میانگین</p>
           </div>
         )}
         {bestSess && (
@@ -611,18 +617,20 @@ function SmartReportTab() {
   const [report, setReport] = useState<SmartReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [generated, setGenerated] = useState(false);
+  const selectedAccountId = useAppStore(s => s.analyticsAccountId);
 
   const generate = useCallback(async () => {
     setLoading(true);
     try {
-      const [trades, journals] = await Promise.all([db.trades.toArray(), db.dailyJournals.toArray()]);
+      const [allTrades, journals] = await Promise.all([db.trades.toArray(), db.dailyJournals.toArray()]);
+      const trades = selectedAccountId ? allTrades.filter(trade => trade.accountId === selectedAccountId) : [];
       const r = generateSmartReport(trades, journals as DailyJournal[]);
       setReport(r);
       setGenerated(true);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [selectedAccountId]);
 
   const priorityOrder = { high: 0, medium: 1, low: 2 };
 
@@ -743,11 +751,13 @@ function SmartReportTab() {
 function DisciplineScoreTab() {
   const [result, setResult] = useState<DisciplineScoreResult | null>(null);
   const [loading, setLoading] = useState(true);
+  const selectedAccountId = useAppStore(s => s.analyticsAccountId);
 
   useEffect(() => {
     (async () => {
       try {
-        const trades = await db.trades.toArray();
+        const allTrades = await db.trades.toArray();
+        const trades = selectedAccountId ? allTrades.filter(trade => trade.accountId === selectedAccountId) : [];
         setResult(computeDisciplineScore(trades));
       } catch {
         // DB error — component will render empty state gracefully
@@ -755,7 +765,7 @@ function DisciplineScoreTab() {
         setLoading(false);
       }
     })();
-  }, []);
+  }, [selectedAccountId]);
 
   if (loading) return <LoadingState message="در حال محاسبه امتیاز انضباط..." />;
   if (!result || result.closedCount < 5) {

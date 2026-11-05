@@ -14,12 +14,9 @@ import {
   getByDay, getByHour, getBySession, getOvertradingAnalysis,
   BehaviorPattern, calcBaseMetrics,
 } from './performanceService';
-import {
-  avg, stdDev, toDateStr,
-  isClosed, isWin,
-  getPTR, flagCount,
-} from '../lib/tradeHelpers';
+import { toDateStr, isClosed, getPTR, flagCount } from '../lib/tradeHelpers';
 import { getTradingMonthKey } from '../lib/tradingTime';
+import { getR, mean, stdDev, winRateOf } from '../core/metrics/engine';
 
 // ── ۱. تحلیل عملکرد ذهنی ─────────────────────────────────────────────────
 
@@ -97,8 +94,7 @@ export function analyzeMentalPerformance(
     } catch { /* ignore */ }
 
     const closed = dayTrades;
-    const wins = closed.filter(isWin).length;
-    const withR    = closed.filter(t => t.rMultiple !== null);
+    const withR    = closed.map(getR).filter((r): r is number => r !== null);
     const withRisk = closed.filter(t => t.riskPercentage !== null);
 
     dailyRecords.push({
@@ -107,9 +103,9 @@ export function analyzeMentalPerformance(
       focus: Math.round(focus), stress: Math.round(stress),
       trades: dayTrades,
       tradeCount: closed.length,
-      winRate: closed.length > 0 ? wins / closed.length : null,
-      avgR:    avg(withR.map(t => t.rMultiple!)),
-      avgRisk: avg(withRisk.map(t => t.riskPercentage!)),
+      winRate: winRateOf(closed),
+      avgR:    mean(withR),
+      avgRisk: mean(withRisk.map(t => t.riskPercentage!)),
     });
   }
 
@@ -129,16 +125,15 @@ export function analyzeMentalPerformance(
     });
     return [...groups.entries()].map(([level, recs]) => {
       const allT   = recs.flatMap(r => r.trades);
-      const wins   = allT.filter(isWin).length;
-      const withR  = allT.filter(t => t.rMultiple !== null);
+      const withR  = allT.map(getR).filter((r): r is number => r !== null);
       const wRisk  = allT.filter(t => t.riskPercentage !== null);
       return {
         level,
         sampleSize: recs.length,
         tradeCount: recs.length > 0 ? allT.length / recs.length : 0,
-        winRate: allT.length > 0 ? wins / allT.length : null,
-        avgR:    avg(withR.map(t => t.rMultiple!)),
-        avgRisk: avg(wRisk.map(t => t.riskPercentage!)),
+        winRate: winRateOf(allT),
+        avgR:    mean(withR),
+        avgRisk: mean(wRisk.map(t => t.riskPercentage!)),
       };
     });
   }
@@ -161,9 +156,8 @@ export function analyzeMentalPerformance(
   });
   const tradeCountCorrelation = [...countGroups.entries()].sort(([a], [b]) => a - b).map(([count, recs]) => {
     const allT  = recs.flatMap(r => r.trades);
-    const wins  = allT.filter(isWin).length;
-    const withR = allT.filter(t => t.rMultiple !== null);
-    return { count, winRate: allT.length > 0 ? wins / allT.length : null, avgR: avg(withR.map(t => t.rMultiple!)) };
+    const withR = allT.map(getR).filter((r): r is number => r !== null);
+    return { count, winRate: winRateOf(allT), avgR: mean(withR) };
   });
 
   const bm = best(byMood); const be = best(byEnergy); const bf = best(byFocus); const ws = worst(byStress);
@@ -311,7 +305,7 @@ export function computeDisciplineScore(allTrades: Trade[]): DisciplineScoreResul
 
   // ── مدیریت سرمایه
   const risks    = closed.filter(t => t.riskPercentage !== null).map(t => t.riskPercentage!);
-  const riskMean = avg(risks) ?? 0;
+  const riskMean = mean(risks) ?? 0;
   const riskCV   = risks.length >= 3 ? (stdDev(risks)! / (riskMean || 1)) : null;
   const slRespectedRate  = pn > 0 ? ptrs.filter(r => r.slRespected === true).length / pn : null;
   const riskIncreasedRate = pn > 0 ? ptrs.filter(r => r.riskIncreased === true).length / pn : 0;
@@ -393,7 +387,7 @@ export function computeDisciplineScore(allTrades: Trade[]): DisciplineScoreResul
   const byDate = new Map<string, number>();
   closed.forEach(t => { const d = toDateStr(t.openedAt); byDate.set(d, (byDate.get(d) ?? 0) + 1); });
   const dailyCounts = [...byDate.values()];
-  const countCV = dailyCounts.length >= 3 ? (stdDev(dailyCounts)! / (avg(dailyCounts) || 1)) : null;
+  const countCV = dailyCounts.length >= 3 ? (stdDev(dailyCounts)! / (mean(dailyCounts) || 1)) : null;
 
   let disciplineScore = 100;
   disciplineScore -= Math.round(overtradingRate * 30);
@@ -485,8 +479,8 @@ export function generateSmartReport(allTrades: Trade[], journals: DailyJournal[]
   const bestSess = bySession.filter(s => s.winRate !== null && s.count >= 3).sort((a, b) => (b.winRate ?? 0) - (a.winRate ?? 0))[0];
   if (bestSess && (bestSess.winRate ?? 0) > 0.55) positives.push({ icon: '⏰', title: `بهترین سشن: ${bestSess.label}`, description: `در سشن ${bestSess.label} با نرخ برد ${Math.round((bestSess.winRate ?? 0) * 100)}٪ بهترین عملکرد را دارید.`, evidence: `${bestSess.count} معامله، میانگین ${bestSess.avgR?.toFixed(2) ?? '—'}R`, priority: 'medium' });
 
-  const bestDay = byDay.filter(d => d.winRate !== null && d.count >= 3).sort((a, b) => (b.winRate ?? 0) - (a.winRate ?? 0))[0];
-  if (bestDay && (bestDay.winRate ?? 0) > 0.55) positives.push({ icon: '📅', title: `بهترین روز: ${bestDay.dayName}`, description: `روز ${bestDay.dayName} با نرخ برد ${Math.round((bestDay.winRate ?? 0) * 100)}٪ بهترین روز هفته‌ی شماست.`, evidence: `${bestDay.count} معامله در این روز`, priority: 'medium' });
+  const bestDay = byDay.find(day => day.bestByAvgR);
+  if (bestDay && (bestDay.avgR ?? 0) > 0) positives.push({ icon: '📅', title: `بهترین روز: ${bestDay.dayName}`, description: `میانگین نتیجه در روز ${bestDay.dayName} برابر ${bestDay.avgR!.toFixed(2)}R است.`, evidence: `${bestDay.rCount} معامله با R ثبت‌شده`, priority: 'medium' });
 
   if (base.expectancy !== null && base.expectancy > 0.3) positives.push({ icon: '📈', title: `انتظار مثبت: ${base.expectancy.toFixed(2)}R`, description: 'میانگین سود هر معامله از نظر ریسک/ریوارد مثبت است. این یک مزیت معاملاتی واقعی است.', evidence: `بر اساس ${n} معامله بسته`, priority: 'high' });
   if (base.winRate !== null && base.winRate > 0.55) positives.push({ icon: '🏆', title: `نرخ برد قوی: ${Math.round(base.winRate * 100)}٪`, description: 'بیشتر از نیمی از معاملات شما به سود ختم می‌شود.', evidence: `${base.winCount} برد از ${n} معامله`, priority: 'high' });
@@ -502,18 +496,18 @@ export function generateSmartReport(allTrades: Trade[], journals: DailyJournal[]
     priority: m.severity === 'high' ? 'high' : 'medium',
   }));
 
-  const worstDay = byDay.filter(d => d.winRate !== null && d.count >= 3).sort((a, b) => (a.winRate ?? 1) - (b.winRate ?? 1))[0];
-  if (worstDay && (worstDay.winRate ?? 1) < 0.4) negatives.push({ icon: '📉', title: `ضعیف‌ترین روز: ${worstDay.dayName}`, description: `روز ${worstDay.dayName} با نرخ برد فقط ${Math.round((worstDay.winRate ?? 0) * 100)}٪ بدترین عملکرد هفتگی شماست.`, evidence: `${worstDay.count} معامله، اغلب ضررده`, priority: 'medium' });
+  const worstDay = byDay.find(day => day.worstByAvgR);
+  if (worstDay && (worstDay.avgR ?? 0) < 0) negatives.push({ icon: '📉', title: `ضعیف‌ترین روز: ${worstDay.dayName}`, description: `میانگین نتیجه در روز ${worstDay.dayName} برابر ${worstDay.avgR!.toFixed(2)}R است.`, evidence: `${worstDay.rCount} معامله با R ثبت‌شده`, priority: 'medium' });
 
   if (overtrading.daysOverThreshold > 0 && overtrading.daysOverThreshold / overtrading.tradingDays > 0.2) {
     const ovDays = overtrading.overtradingDays.filter(d => d.avgR !== null);
-    const avgROvr = avg(ovDays.map(d => d.avgR!));
+    const avgROvr = mean(ovDays.map(d => d.avgR!));
     negatives.push({ icon: '🔄', title: 'Overtrading', description: `در ${overtrading.daysOverThreshold} روز از ${overtrading.tradingDays} روز معاملاتی بیش از ۴ معامله انجام دادید.`, evidence: avgROvr !== null ? `میانگین R در روزهای پرمعامله: ${avgROvr.toFixed(2)}` : `${overtrading.maxTradesInDay} معامله بیشترین در یک روز`, priority: 'high' });
   }
   if (pq.total > 0 && pq.total < 55) negatives.push({ icon: '📊', title: `کیفیت پروسه پایین: ${pq.total}٪`, description: 'بررسی ریویوهای معاملاتی نشان می‌دهد فرآیند معامله‌گری نیاز به بهبود دارد.', evidence: `بر اساس ${pq.reviewedCount} ریویو کامل شده`, priority: 'medium' });
 
-  const worstHour = byHour.filter(h => h.winRate !== null && h.count >= 3).sort((a, b) => (a.winRate ?? 1) - (b.winRate ?? 1))[0];
-  if (worstHour && (worstHour.winRate ?? 1) < 0.35) negatives.push({ icon: '🕐', title: `بدترین ساعت: ${worstHour.label}`, description: `در ساعت ${worstHour.label} نرخ برد شما فقط ${Math.round((worstHour.winRate ?? 0) * 100)}٪ است.`, evidence: `${worstHour.count} معامله در این بازه زمانی`, priority: 'medium' });
+  const worstHour = byHour.find(hour => hour.worstByAvgR);
+  if (worstHour && (worstHour.avgR ?? 0) < 0) negatives.push({ icon: '🕐', title: `بدترین ساعت: ${worstHour.label}`, description: `میانگین نتیجه در ساعت ${worstHour.label} برابر ${worstHour.avgR!.toFixed(2)}R است.`, evidence: `${worstHour.rCount} معامله با R ثبت‌شده`, priority: 'medium' });
   if (base.winRate !== null && base.winRate < 0.4 && n >= 10) negatives.push({ icon: '❌', title: `نرخ برد پایین: ${Math.round(base.winRate * 100)}٪`, description: 'کمتر از ۴۰٪ معاملات به سود ختم می‌شود. بررسی کیفیت ستاپ‌ها ضروری است.', evidence: `${base.lossCount} ضرر از ${n} معامله بسته`, priority: 'high' });
 
   // ── پیشنهادها
@@ -535,8 +529,8 @@ export function generateSmartReport(allTrades: Trade[], journals: DailyJournal[]
   if (journals.length < 5) suggestions.push({ icon: '📔', title: 'ژورنال روزانه ذهنی بنویسید', description: 'ثبت حال روزانه (خلق، انرژی، فوکوس) به شما کمک می‌کند بفهمید چه روزهایی برای معامله مناسب نیستید.', evidence: `تا کنون ${journals.length} ورودی ژورنال ثبت شده`, priority: 'high' });
   if (reviewRate < 0.4) suggestions.push({ icon: '📝', title: 'ریویو بعد از هر معامله را عادت کنید', description: 'حتی ۳ جمله کوتاه بعد از معامله سرعت یادگیری را دو برابر می‌کند.', evidence: `نرخ ریویو فعلی: ${Math.round(reviewRate * 100)}٪`, priority: 'medium' });
 
-  const bestHour = byHour.filter(h => h.winRate !== null && h.count >= 3).sort((a, b) => (b.winRate ?? 0) - (a.winRate ?? 0))[0];
-  if (bestHour && (bestHour.winRate ?? 0) > 0.6) suggestions.push({ icon: '⏱️', title: `ساعت ${bestHour.label} را اولویت دهید`, description: `در این بازه زمانی نرخ برد ${Math.round((bestHour.winRate ?? 0) * 100)}٪ دارید.`, evidence: `${bestHour.count} معامله با نرخ برد بالا`, priority: 'medium' });
+  const bestHour = byHour.find(hour => hour.bestByAvgR);
+  if (bestHour && (bestHour.avgR ?? 0) > 0) suggestions.push({ icon: '⏱️', title: `ساعت ${bestHour.label} را اولویت دهید`, description: `میانگین نتیجه در این بازه ${bestHour.avgR!.toFixed(2)}R است.`, evidence: `${bestHour.rCount} معامله با R ثبت‌شده`, priority: 'medium' });
 
   const posScore   = Math.min(50, positives.filter(p => p.priority === 'high').length * 10 + positives.filter(p => p.priority === 'medium').length * 5);
   const negPenalty = Math.min(50, negatives.filter(p => p.priority === 'high').length * 15 + negatives.filter(p => p.priority === 'medium').length * 7);

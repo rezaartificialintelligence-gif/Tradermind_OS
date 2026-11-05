@@ -1,9 +1,12 @@
 import { db, Trade, defaultPostTradeReview } from '../db/database';
-import { isWin, isClosed, getNetPnl } from '../lib/tradeHelpers';
+import { isClosed, getNetPnl } from '../lib/tradeHelpers';
 import { strategyService } from './strategyService';
 import { analysisService } from './analysisService';
 import { tradeVersionService, tradeEventService } from './tradeEventService';
+import { accountService } from './accountService';
 import { detectTradingSession } from '../lib/tradeClassification';
+import { isTradingBoxAvailableForAccount } from './tradingBoxService';
+import { computeMetrics } from '../core/metrics/engine';
 
 const defaultReview = JSON.stringify({ didWell: '', didWrong: '', learned: '', wouldTakeAgain: null, validSetup: null });
 const defaultPostTradeReviewStr = JSON.stringify(defaultPostTradeReview);
@@ -80,7 +83,8 @@ export const tradeService = {
       defaults.boxId ? db.tradingBoxes.get(defaults.boxId) : Promise.resolve(undefined),
     ]);
     defaults.accountId = linkedJournalSession?.accountId ?? (defaultAccount && !defaultAccount.isArchived ? defaultAccount.id : null);
-    defaults.boxId = linkedJournalSession?.tradingBoxId ?? defaultBox?.id ?? null;
+    defaults.boxId = linkedJournalSession?.tradingBoxId
+      ?? (defaultBox && isTradingBoxAvailableForAccount(defaultBox, defaultAccount) ? defaultBox.id : null);
     defaults.strategyId = linkedJournalSession?.strategyId ?? null;
     if (sessionSymbol) defaults.symbol = sessionSymbol;
 
@@ -220,6 +224,7 @@ export const tradeService = {
         db.marketContextSessions,
         db.journalTradeData,
         db.journalMedia,
+        db.journalTriggerEvents,
       ],
       async () => {
         // حذف رکوردهای وابسته
@@ -230,6 +235,18 @@ export const tradeService = {
         await db.learningAuditTrail.where('tradeId').equals(id).delete();
         await db.journalTradeData.where('tradeId').equals(id).delete();
         await db.journalMedia.where('tradeId').equals(id).delete();
+
+        // حذف معامله، تریگر سشن را نیز از وضعیت «تبدیل‌شده» به صف انتخاب برمی‌گرداند.
+        const linkedTriggers = await db.journalTriggerEvents.where('linkedTradeId').equals(id).toArray();
+        for (const trigger of linkedTriggers) {
+          await db.journalTriggerEvents.update(trigger.id, {
+            linkedTradeId: null,
+            status: 'pending',
+            linkedTradeDirection: null,
+            linkedTradeEntryTriggerOptionId: null,
+            updatedAt: Date.now(),
+          });
+        }
 
         // unlink کردن marketContextSessions بدون حذف آن‌ها
         const linkedSessions = await db.marketContextSessions
@@ -268,13 +285,12 @@ export const tradeService = {
   async getStats() {
     const trades = await db.trades.toArray();
     const closed = trades.filter(isClosed);
-    const wins = closed.filter(isWin);
-    const withR = closed.filter(t => t.rMultiple != null);
+    const m = computeMetrics(closed); // موتور واحد
     return {
       total: trades.length,
-      winRate: closed.length > 0 ? (wins.length / closed.length) * 100 : 0,
+      winRate: m.winRate === null ? 0 : m.winRate * 100,
       totalPnl: trades.reduce((acc, t) => acc + (getNetPnl(t) ?? 0), 0),
-      avgRMultiple: withR.length > 0 ? withR.reduce((acc, t) => acc + (t.rMultiple || 0), 0) / withR.length : 0,
+      avgRMultiple: m.avgR ?? 0,
       closedCount: closed.length,
       openCount: trades.filter(t => t.status === 'open').length,
     };
@@ -318,4 +334,31 @@ export const tradeService = {
 };
 
 // re-export for backward compat
+// ── بالانس حساب: بعد از هر ثبت/ویرایش/حذف معامله با سود و زیان معاملات هماهنگ می‌شود ──
+// خطای محاسبهٔ بالانس هرگز نباید ذخیرهٔ خود معامله را خراب کند.
+const syncBalance = async (...accountIds: Array<string | null | undefined>) => {
+  for (const accountId of new Set(accountIds)) {
+    try { await accountService.recalculateBalance(accountId); } catch { /* نادیده */ }
+  }
+};
+const baseCreateTrade = tradeService.createTrade.bind(tradeService);
+const baseUpdateTrade = tradeService.updateTrade.bind(tradeService);
+const baseDeleteTrade = tradeService.deleteTrade.bind(tradeService);
+tradeService.createTrade = async (data: Partial<Trade> = {}) => {
+  const created = await baseCreateTrade(data);
+  await syncBalance(created.accountId);
+  return created;
+};
+tradeService.updateTrade = async (id: string, data: Partial<Trade>) => {
+  const before = await db.trades.get(id);
+  const updated = await baseUpdateTrade(id, data);
+  await syncBalance(before?.accountId, updated?.accountId);
+  return updated;
+};
+tradeService.deleteTrade = async (id: string) => {
+  const before = await db.trades.get(id);
+  await baseDeleteTrade(id);
+  await syncBalance(before?.accountId);
+};
+
 export { tradeEventService };

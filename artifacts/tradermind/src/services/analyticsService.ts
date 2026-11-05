@@ -3,13 +3,15 @@
  * تمام توابع pure هستند و قابل Unit Test.
  */
 import { Trade, DailyJournal, Strategy } from '../db/database';
-import { isWin, isLoss, isClosed, toDateStr, getNetPnl } from '../lib/tradeHelpers';
+import { isWin, isLoss, isClosed, toDateStr } from '../lib/tradeHelpers';
 import {
   getTradingDateParts,
   getTradingDayStart,
   getTradingMonthStart,
   getTradingTimestampForParts,
 } from '../lib/tradingTime';
+import { winRateOf, avgROf, computeMetrics, computeMetricsBy, rankMetricGroups, type TradeMetrics } from '../core/metrics/engine';
+import { computePnlCurve } from '../core/metrics/pnl';
 
 // ================================================================
 // Types
@@ -138,19 +140,16 @@ const PERSIAN_DAYS = ['یکشنبه', 'دوشنبه', 'سه‌شنبه', 'چها
 export const WEEK_ORDER = [6, 0, 1, 2, 3, 4, 5];
 
 function calcWinRate(trades: Trade[]): number {
-  const cl = trades.filter(isClosed);
-  if (cl.length === 0) return 0;
-  return (cl.filter(isWin).length / cl.length) * 100;
+  const r = winRateOf(trades); // موتور واحد
+  return r === null ? 0 : r * 100;
 }
 
 function calcAvgR(trades: Trade[]): number | null {
-  const withR = trades.filter(t => t.rMultiple != null);
-  if (withR.length === 0) return null;
-  return withR.reduce((s, t) => s + (t.rMultiple || 0), 0) / withR.length;
+  return avgROf(trades); // موتور واحد
 }
 
 function calcTotalPnl(trades: Trade[]): number {
-  return trades.reduce((s, t) => s + (getNetPnl(t) ?? 0), 0);
+  return computeMetrics(trades).netPnl; // موتور واحد (سود خالص)
 }
 
 function parseEmotions(json: string): string[] {
@@ -181,16 +180,30 @@ export function getDateRange(key: Exclude<TimeRangeKey, 'custom'>): { from: numb
     case 'today':
       return { from: todayStart, to };
     case 'week': {
-      const sinceSaturday = parts.dayOfWeek === 6 ? 0 : parts.dayOfWeek + 1;
-      return { from: todayStart - sinceSaturday * 86_400_000, to };
+      const sinceSaturday = (parts.dayOfWeek + 1) % 7;
+      return {
+        from: getTradingTimestampForParts(parts.year, parts.month, parts.day - sinceSaturday),
+        to,
+      };
     }
     case 'month':
       return { from: getTradingMonthStart(now), to };
-    case '3months':
+    case '3months': {
+      const targetMonth = new Date(Date.UTC(parts.year, parts.month - 3, 1));
+      const lastTargetDay = new Date(Date.UTC(
+        targetMonth.getUTCFullYear(),
+        targetMonth.getUTCMonth() + 1,
+        0,
+      )).getUTCDate();
       return {
-        from: getTradingTimestampForParts(parts.year, parts.month - 3, parts.day),
+        from: getTradingTimestampForParts(
+          targetMonth.getUTCFullYear(),
+          targetMonth.getUTCMonth(),
+          Math.min(parts.day, lastTargetDay),
+        ),
         to,
       };
+    }
     case 'year':
       return { from: getTradingTimestampForParts(parts.year, 0, 1), to };
     default:
@@ -213,34 +226,30 @@ export function computeAnalytics(
 ): AnalyticsData {
   const strategyMap = new Map<string, string>(strategies.map(s => [s.id, s.name]));
   const closed = trades.filter(isClosed);
-  const pnlValues = closed.map(t => getNetPnl(t) ?? 0);
+  const summaryMetrics = computeMetrics(trades);
 
   // ---- Summary ----
   const summary: TradeSummary = {
     total: trades.length,
-    wins: closed.filter(isWin).length,
-    losses: closed.filter(isLoss).length,
-    breakeven: closed.filter(t => t.result === 'breakeven').length,
+    wins: summaryMetrics.winCount,
+    losses: summaryMetrics.lossCount,
+    breakeven: summaryMetrics.breakEvenCount,
     open: trades.filter(t => t.status === 'open').length,
     winRate: calcWinRate(trades),
-    totalPnl: calcTotalPnl(trades),
-    avgR: calcAvgR(closed),
-    avgRisk: (() => {
-      const w = trades.filter(t => t.riskPercentage != null);
-      return w.length ? w.reduce((s, t) => s + (t.riskPercentage || 0), 0) / w.length : null;
-    })(),
-    bestTrade: pnlValues.length ? Math.max(...pnlValues) : null,
-    worstTrade: pnlValues.length ? Math.min(...pnlValues) : null,
+    totalPnl: summaryMetrics.netPnl,
+    avgR: summaryMetrics.avgR,
+    avgRisk: summaryMetrics.avgRiskPct,
+    bestTrade: summaryMetrics.bestPnl,
+    worstTrade: summaryMetrics.worstPnl,
   };
 
   // ---- P/L Curve ----
-  const chrono = [...closed].sort((a, b) => (a.closedAt || a.openedAt) - (b.closedAt || b.openedAt));
-  let cum = 0;
-  const pnlCurve: PnlPoint[] = chrono.map((t, i) => {
-    const pnl = getNetPnl(t) ?? 0;
-    cum += pnl;
-    return { index: i + 1, symbol: t.symbol, pnl: +pnl.toFixed(2), cumulative: +cum.toFixed(2) };
-  });
+  const pnlCurve: PnlPoint[] = computePnlCurve(closed).map(point => ({
+    index: point.index,
+    symbol: point.symbol,
+    pnl: +point.pnl.toFixed(2),
+    cumulative: +point.cumulative.toFixed(2),
+  }));
 
   // ---- Strategy Performance ----
   const stratGroups = new Map<string | null, Trade[]>();
@@ -251,31 +260,39 @@ export function computeAnalytics(
   });
   const strategyPerf: StrategyPerf[] = [];
   for (const [id, ts] of stratGroups) {
+    const metrics = computeMetrics(ts);
     const cl2 = ts.filter(isClosed);
     const withScore = cl2.filter(t => t.adherenceScore != null);
     strategyPerf.push({
       strategyId: id,
       strategyName: id ? (strategyMap.get(id) || 'استراتژی ناشناخته') : 'بدون استراتژی',
       total: ts.length,
-      wins: cl2.filter(isWin).length,
-      losses: cl2.filter(isLoss).length,
-      winRate: calcWinRate(ts),
-      totalPnl: calcTotalPnl(ts),
-      avgR: calcAvgR(cl2),
+      wins: metrics.winCount,
+      losses: metrics.lossCount,
+      winRate: metrics.winRate === null ? 0 : metrics.winRate * 100,
+      totalPnl: metrics.netPnl,
+      avgR: metrics.avgR,
       avgAdherence: withScore.length ? withScore.reduce((s, t) => s + (t.adherenceScore || 0), 0) / withScore.length : null,
     });
   }
   strategyPerf.sort((a, b) => b.total - a.total);
 
   // ---- Day of Week ----
-  const dayGroups: Map<number, Trade[]> = new Map(Array.from({ length: 7 }, (_, i) => [i, []]));
-  trades.forEach(t => dayGroups.get(getTradingDateParts(t.openedAt).dayOfWeek)!.push(t));
-  const dayOfWeekPerf: DayOfWeekPerf[] = WEEK_ORDER
-    .map(day => {
-      const ts = dayGroups.get(day) || [];
-      const cl2 = ts.filter(isClosed);
-      return { day, dayName: PERSIAN_DAYS[day], total: ts.length, wins: cl2.filter(isWin).length, winRate: calcWinRate(ts), totalPnl: calcTotalPnl(ts), avgR: calcAvgR(cl2) };
-    })
+  const dayMetricGroups = computeMetricsBy(
+    trades,
+    trade => getTradingDateParts(trade.openedAt).dayOfWeek,
+  );
+  const dayOfWeekPerf: DayOfWeekPerf[] = dayMetricGroups
+    .map(({ key, metrics }) => ({
+      day: Number(key),
+      dayName: PERSIAN_DAYS[Number(key)],
+      total: metrics.count,
+      wins: metrics.winCount,
+      winRate: metrics.winRate === null ? 0 : metrics.winRate * 100,
+      totalPnl: metrics.netPnl,
+      avgR: metrics.avgR,
+    }))
+    .sort((a, b) => WEEK_ORDER.indexOf(a.day) - WEEK_ORDER.indexOf(b.day))
     .filter(d => d.total > 0);
 
   // ---- Emotion Performance ----
@@ -378,7 +395,15 @@ export function computeAnalytics(
   };
 
   // ---- Insights ----
-  const insights = generateInsights({ summary, adherencePerf, emotionPerf, dayOfWeekPerf, dailyStatePerf, behaviorInsight });
+  const insights = generateInsights({
+    summary,
+    adherencePerf,
+    emotionPerf,
+    dayOfWeekPerf,
+    dayMetricGroups,
+    dailyStatePerf,
+    behaviorInsight,
+  });
 
   return { summary, pnlCurve, strategyPerf, dayOfWeekPerf, emotionPerf, dailyStatePerf, adherencePerf, timeSlotPerf, behaviorInsight, insights };
 }
@@ -392,11 +417,12 @@ function generateInsights(data: {
   adherencePerf: AdherencePerf[];
   emotionPerf: EmotionPerf[];
   dayOfWeekPerf: DayOfWeekPerf[];
+  dayMetricGroups: Array<{ key: string | number; metrics: TradeMetrics }>;
   dailyStatePerf: DailyStatePerf | null;
   behaviorInsight: BehaviorInsight;
 }): InsightCard[] {
   const insights: InsightCard[] = [];
-  const { summary, adherencePerf, emotionPerf, dayOfWeekPerf, dailyStatePerf, behaviorInsight } = data;
+  const { summary, adherencePerf, emotionPerf, dayOfWeekPerf, dayMetricGroups, dailyStatePerf, behaviorInsight } = data;
 
   if (summary.total < 5) {
     insights.push({ type: 'neutral', text: 'برای مشاهده الگوهای معنادار، به ثبت معاملات بیشتر نیاز است.' });
@@ -438,12 +464,15 @@ function generateInsights(data: {
   }
 
   // Best/worst day
-  const dwd = dayOfWeekPerf.filter(d => d.total >= 3);
-  if (dwd.length >= 3) {
-    const best  = [...dwd].sort((a, b) => b.winRate - a.winRate)[0];
-    const worst = [...dwd].sort((a, b) => a.winRate - b.winRate)[0];
-    if (best.winRate - worst.winRate >= 20) {
-      insights.push({ type: 'neutral', text: `در داده‌های ثبت‌شده، بهترین عملکرد در روز ${best.dayName} (${best.winRate.toFixed(0)}٪) و ضعیف‌ترین در روز ${worst.dayName} (${worst.winRate.toFixed(0)}٪) مشاهده شده است.` });
+  const reliableDays = dayMetricGroups.filter(group => group.metrics.rCount >= 3);
+  const dayExtremes = rankMetricGroups(reliableDays, 'avgR', 3);
+  if (reliableDays.length >= 3 && dayExtremes.best && dayExtremes.worst) {
+    const best = dayOfWeekPerf.find(day => day.day === Number(dayExtremes.best!.key));
+    const worst = dayOfWeekPerf.find(day => day.day === Number(dayExtremes.worst!.key));
+    const bestR = dayExtremes.best.metrics.avgR;
+    const worstR = dayExtremes.worst.metrics.avgR;
+    if (best && worst && bestR !== null && worstR !== null && bestR - worstR >= 0.2) {
+      insights.push({ type: 'neutral', text: `بر پایه میانگین R، بهترین عملکرد در روز ${best.dayName} (${bestR.toFixed(2)}R) و ضعیف‌ترین در روز ${worst.dayName} (${worstR.toFixed(2)}R) ثبت شده است.` });
     }
   }
 

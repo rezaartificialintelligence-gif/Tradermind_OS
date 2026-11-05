@@ -1,11 +1,18 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useLocation } from 'wouter';
-import { ArrowUpLeft, CalendarDays, CircleAlert, Layers3, Plus, Search, Target } from 'lucide-react';
+import { ArrowUpLeft, CalendarDays, CircleAlert, Layers3, Pin, PinOff, Plus, Search, Target } from 'lucide-react';
 import { toast } from 'sonner';
 import { accountService } from '../services/accountService';
 import { journalSessionService, parseJournalArray } from '../services/journalSessionService';
 import { strategyService } from '../services/strategyService';
-import { tradingBoxService } from '../services/tradingBoxService';
+import {
+  getJournalSessionDefaults,
+  setJournalSessionDefault,
+  type JournalSessionDefaultKey,
+  type JournalSessionDefaults,
+} from '../services/journalSessionDefaults';
+import { describeSessionMoment, detectSessionKind, findSessionTypeOptionId, formatDualDateTime, sessionKindLabel } from '../lib/sessionDateTime';
+import { isTradingBoxAvailableForAccount, tradingBoxService } from '../services/tradingBoxService';
 import type { Account, JournalOption, JournalSession, Strategy, TradingBox } from '../db/database';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -20,7 +27,6 @@ const dateTimeLocal = (date: Date) => {
   const offset = date.getTimezoneOffset();
   return new Date(date.getTime() - offset * 60_000).toISOString().slice(0, 16);
 };
-const faDate = (time: number) => new Intl.DateTimeFormat('fa-IR', { dateStyle: 'medium', timeStyle: 'short' }).format(time);
 
 type SessionForm = {
   accountId: string;
@@ -36,9 +42,37 @@ type SessionForm = {
 };
 const freshForm = (): SessionForm => ({
   accountId: '', tradingBoxId: '', strategyId: '', startTime: dateTimeLocal(new Date()),
-  symbol: '', marketOptionId: 'none', sessionTypeOptionId: 'none', notes: '', tags: '',
+  symbol: '', marketOptionId: 'none', sessionTypeOptionId: 'auto', notes: '', tags: '',
   preTradePsychologyOptionIds: [],
 });
+
+/** مقدارهای پیش‌فرضِ سنجاق‌شده را فقط در فیلدهای هنوز خالی و فقط اگر هنوز معتبر باشند اعمال می‌کند. */
+function applyDefaults(
+  current: SessionForm,
+  data: { accounts: Account[]; boxes: TradingBox[]; strategies: Strategy[] },
+): SessionForm {
+  const defaults = getJournalSessionDefaults();
+  const next = { ...current };
+  if (!next.accountId && defaults.accountId && data.accounts.some(item => item.id === defaults.accountId)) next.accountId = defaults.accountId;
+  const account = data.accounts.find(item => item.id === next.accountId);
+  const box = defaults.tradingBoxId ? data.boxes.find(item => item.id === defaults.tradingBoxId) : undefined;
+  if (!next.tradingBoxId && box && account && isTradingBoxAvailableForAccount(box, account)) next.tradingBoxId = box.id;
+  if (!next.strategyId && defaults.strategyId && data.strategies.some(item => item.id === defaults.strategyId)) next.strategyId = defaults.strategyId;
+  if (!next.symbol && defaults.symbol) next.symbol = defaults.symbol;
+  return next;
+}
+
+function DefaultPin({ pinned, disabled, onToggle, testId }: { pinned: boolean; disabled: boolean; onToggle: () => void; testId: string }) {
+  return (
+    <button type="button" onClick={onToggle} disabled={disabled} aria-pressed={pinned}
+      aria-label={pinned ? 'برداشتن پیش‌فرض' : 'ذخیره به‌عنوان پیش‌فرض'}
+      title={pinned ? 'پیش‌فرض است؛ برای برداشتن بزنید' : 'ذخیره به‌عنوان پیش‌فرض'}
+      className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] transition-colors disabled:opacity-40 ${pinned ? 'border-primary/50 bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:bg-muted'}`}
+      data-testid={testId}>
+      {pinned ? <Pin className="h-3 w-3" /> : <PinOff className="h-3 w-3" />}{pinned ? 'پیش‌فرض' : 'پیش‌فرض کن'}
+    </button>
+  );
+}
 
 export default function JournalSessions() {
   const [, setLocation] = useLocation();
@@ -48,6 +82,7 @@ export default function JournalSessions() {
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [options, setOptions] = useState<JournalOption[]>([]);
   const [form, setForm] = useState<SessionForm>(freshForm);
+  const [defaults, setDefaults] = useState<Partial<JournalSessionDefaults>>(getJournalSessionDefaults);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -58,15 +93,21 @@ export default function JournalSessions() {
     setError('');
     try {
       await journalSessionService.ensureDefaultOptions();
-      const [sessionRows, accountRows, boxRows, strategyRows, optionRows] = await Promise.all([
+      const [sessionRows, accountRows, boxRows, strategyRows, optionRows, hiddenCategoryIds] = await Promise.all([
         journalSessionService.getSessions(), accountService.getAll(), tradingBoxService.getAll(),
-        strategyService.getAllStrategies(), journalSessionService.getOptions(),
+        strategyService.getAllStrategies(), journalSessionService.getOptions(), journalSessionService.getHiddenCategoryIds(),
       ]);
       setSessions(sessionRows);
       setAccounts(accountRows.filter(account => !account.isArchived));
       setBoxes(boxRows.filter(box => box.status === 'active'));
       setStrategies(strategyRows);
-      setOptions(optionRows);
+      setOptions(optionRows.filter(option => !hiddenCategoryIds.includes(option.category)));
+      setDefaults(getJournalSessionDefaults());
+      setForm(current => applyDefaults(current, {
+        accounts: accountRows.filter(account => !account.isArchived),
+        boxes: boxRows.filter(box => box.status === 'active'),
+        strategies: strategyRows,
+      }));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'بارگذاری دفتر سشن‌ها انجام نشد.');
     } finally {
@@ -76,8 +117,11 @@ export default function JournalSessions() {
   useEffect(() => { void load(); }, []);
 
   const eligibleBoxes = useMemo(
-    () => boxes.filter(box => !box.accountId || box.accountId === form.accountId),
-    [boxes, form.accountId],
+    () => {
+      const account = accounts.find(item => item.id === form.accountId);
+      return boxes.filter(box => isTradingBoxAvailableForAccount(box, account));
+    },
+    [boxes, accounts, form.accountId],
   );
   const accountById = useMemo(() => new Map(accounts.map(item => [item.id, item])), [accounts]);
   const boxById = useMemo(() => new Map(boxes.map(item => [item.id, item])), [boxes]);
@@ -85,6 +129,25 @@ export default function JournalSessions() {
   const sessionTypes = options.filter(item => item.category === 'session_type' && item.enabled);
   const marketOptions = options.filter(item => item.category === 'market' && item.enabled);
   const psychologyOptions = options.filter(item => item.category === 'psychology' && item.enabled);
+  const startTimestamp = form.startTime ? new Date(form.startTime).getTime() : Number.NaN;
+  const startMoment = describeSessionMoment(startTimestamp);
+  const detectedKind = Number.isFinite(startTimestamp) ? detectSessionKind(startTimestamp) : null;
+  const detectedSessionTypeId = detectedKind ? findSessionTypeOptionId(sessionTypes, detectedKind) : null;
+  const togglePin = (key: JournalSessionDefaultKey) => {
+    const value = form[key];
+    const pinned = Boolean(value) && defaults[key] === (key === 'symbol' ? value.trim().toUpperCase() : value);
+    try {
+      setJournalSessionDefault(key, pinned ? null : value);
+      setDefaults(getJournalSessionDefaults());
+      toast.success(pinned ? 'پیش‌فرض برداشته شد.' : 'به‌عنوان پیش‌فرض ذخیره شد.');
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : 'ذخیرهٔ پیش‌فرض انجام نشد.');
+    }
+  };
+  const isPinned = (key: JournalSessionDefaultKey) => {
+    const value = form[key];
+    return Boolean(value) && defaults[key] === (key === 'symbol' ? value.trim().toUpperCase() : value);
+  };
   const filteredSessions = sessions.filter(session => {
     const haystack = [
       ...parseJournalArray(session.symbols), accountById.get(session.accountId)?.name,
@@ -109,7 +172,9 @@ export default function JournalSessions() {
         startTime: new Date(form.startTime).getTime(),
         symbols,
         marketOptionId: form.marketOptionId,
-        sessionTypeOptionId: form.sessionTypeOptionId === 'none' ? null : form.sessionTypeOptionId,
+        sessionTypeOptionId: form.sessionTypeOptionId === 'auto'
+          ? detectedSessionTypeId
+          : form.sessionTypeOptionId === 'none' ? null : form.sessionTypeOptionId,
         notes: form.notes,
         tags: form.tags.split(/[،,]+/).map(tag => tag.trim()).filter(Boolean),
         preTradePsychologyOptionIds: form.preTradePsychologyOptionIds,
@@ -129,7 +194,7 @@ export default function JournalSessions() {
   </main>;
 
   return (
-    <main dir="rtl" className="tradermind-page-shell mx-auto w-full max-w-6xl space-y-6 p-4 pb-12 md:p-8" data-testid="page-journal-sessions">
+    <main dir="rtl" className="tradermind-page-shell tm-session-page mx-auto w-full max-w-6xl space-y-6 p-4 pb-12 md:p-8" data-testid="page-journal-sessions">
       <header className="flex flex-col justify-between gap-4 border-b border-border/70 pb-5 sm:flex-row sm:items-end">
         <div>
           <div className="mb-2 flex items-center gap-2 text-xs font-medium tracking-wide text-primary">
@@ -148,7 +213,7 @@ export default function JournalSessions() {
         <Button variant="outline" size="sm" onClick={() => void load()} data-testid="button-retry-sessions">تلاش دوباره</Button>
       </CardContent></Card>}
 
-      <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1.45fr)]">
+      <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1.45fr)]">
         <Card className="tradermind-card overflow-hidden">
           <div className="border-b border-border/70 bg-primary/[0.035] px-5 py-4">
             <div className="flex items-center gap-2"><span className="grid h-8 w-8 place-items-center rounded-lg bg-primary/10 text-primary"><Plus className="h-4 w-4" /></span>
@@ -162,20 +227,28 @@ export default function JournalSessions() {
                 <div className="mt-2 text-xs">داده‌ها از فضای محلی همین دستگاه خوانده می‌شوند.</div>
               </div>
             ) : <form onSubmit={handleCreate} className="space-y-4" data-testid="form-create-session">
-              <div className="space-y-2"><Label htmlFor="session-account">حساب فعال <span className="text-destructive">*</span></Label>
-                <Select value={form.accountId} onValueChange={value => setForm(current => ({ ...current, accountId: value, tradingBoxId: '' }))}>
+              <div className="space-y-2"><div className="flex items-center justify-between gap-2"><Label htmlFor="session-account">حساب فعال <span className="text-destructive">*</span></Label>
+                <DefaultPin pinned={isPinned('accountId')} disabled={!form.accountId} onToggle={() => togglePin('accountId')} testId="pin-session-account" /></div>
+                <Select value={form.accountId} onValueChange={value => setForm(current => {
+                  const nextAccount = accounts.find(item => item.id === value);
+                  const defaultBox = defaults.tradingBoxId ? boxes.find(item => item.id === defaults.tradingBoxId) : undefined;
+                  const keepDefaultBox = defaultBox && nextAccount && isTradingBoxAvailableForAccount(defaultBox, nextAccount);
+                  return { ...current, accountId: value, tradingBoxId: keepDefaultBox ? defaultBox.id : '' };
+                })}>
                   <SelectTrigger id="session-account" data-testid="select-session-account"><SelectValue placeholder="انتخاب حساب" /></SelectTrigger>
                   <SelectContent>{accounts.map(account => <SelectItem key={account.id} value={account.id}>{account.name}{account.broker ? ` · ${account.broker}` : ''}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
-              <div className="space-y-2"><Label htmlFor="session-box">باکس معاملاتی فعال <span className="text-destructive">*</span></Label>
+              <div className="space-y-2"><div className="flex items-center justify-between gap-2"><Label htmlFor="session-box">باکس معاملاتی فعال <span className="text-destructive">*</span></Label>
+                <DefaultPin pinned={isPinned('tradingBoxId')} disabled={!form.tradingBoxId} onToggle={() => togglePin('tradingBoxId')} testId="pin-session-box" /></div>
                 <Select value={form.tradingBoxId} onValueChange={value => setForm(current => ({ ...current, tradingBoxId: value }))} disabled={!form.accountId || eligibleBoxes.length === 0}>
                   <SelectTrigger id="session-box" data-testid="select-session-box"><SelectValue placeholder={form.accountId ? 'انتخاب باکس' : 'ابتدا حساب را انتخاب کنید'} /></SelectTrigger>
                   <SelectContent>{eligibleBoxes.map(box => <SelectItem key={box.id} value={box.id}>{box.name}</SelectItem>)}</SelectContent>
                 </Select>
                 {form.accountId && eligibleBoxes.length === 0 && <p className="text-xs text-muted-foreground">برای این حساب باکس فعال سازگار پیدا نشد.</p>}
               </div>
-              <div className="space-y-2"><Label htmlFor="session-strategy">استراتژی <span className="text-destructive">*</span></Label>
+              <div className="space-y-2"><div className="flex items-center justify-between gap-2"><Label htmlFor="session-strategy">استراتژی <span className="text-destructive">*</span></Label>
+                <DefaultPin pinned={isPinned('strategyId')} disabled={!form.strategyId} onToggle={() => togglePin('strategyId')} testId="pin-session-strategy" /></div>
                 <Select value={form.strategyId} onValueChange={value => setForm(current => ({ ...current, strategyId: value }))}>
                   <SelectTrigger id="session-strategy" data-testid="select-session-strategy"><SelectValue placeholder="انتخاب استراتژی" /></SelectTrigger>
                   <SelectContent>{strategies.map(strategy => <SelectItem key={strategy.id} value={strategy.id}>{strategy.name}{!strategy.isActive ? ' · غیرفعال' : ''}</SelectItem>)}</SelectContent>
@@ -183,8 +256,16 @@ export default function JournalSessions() {
               </div>
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="space-y-2"><Label htmlFor="session-start">تاریخ و ساعت شروع <span className="text-destructive">*</span></Label><Input id="session-start" type="datetime-local" value={form.startTime} onChange={event => setForm(current => ({ ...current, startTime: event.target.value }))} data-testid="input-session-start" /></div>
-                <div className="space-y-2"><Label htmlFor="session-symbol">نماد <span className="text-destructive">*</span></Label><Input id="session-symbol" placeholder="EURUSD" value={form.symbol} onChange={event => setForm(current => ({ ...current, symbol: event.target.value }))} data-testid="input-session-symbol" /></div>
+                <div className="space-y-2"><div className="flex items-center justify-between gap-2"><Label htmlFor="session-symbol">نماد <span className="text-destructive">*</span></Label>
+                  <DefaultPin pinned={isPinned('symbol')} disabled={!form.symbol.trim()} onToggle={() => togglePin('symbol')} testId="pin-session-symbol" /></div>
+                  <Input id="session-symbol" placeholder="EURUSD" value={form.symbol} onChange={event => setForm(current => ({ ...current, symbol: event.target.value }))} data-testid="input-session-symbol" /></div>
               </div>
+              {startMoment && <div className="rounded-lg border border-border/70 bg-muted/25 px-3 py-2 text-sm leading-6" data-testid="text-session-start-preview">
+                <span className="font-semibold">{startMoment.weekday}</span>
+                <span className="mx-2 text-muted-foreground">·</span><span>{startMoment.jalali}</span>
+                <span className="mx-2 text-muted-foreground">·</span><span dir="ltr">{startMoment.gregorian}</span>
+                <span className="mx-2 text-muted-foreground">·</span><span>{startMoment.time}</span>
+              </div>}
               <div className="space-y-2"><Label htmlFor="session-market">بازار <span className="text-destructive">*</span></Label>
                 <Select value={form.marketOptionId} onValueChange={value => setForm(current => ({ ...current, marketOptionId: value }))}>
                   <SelectTrigger id="session-market" data-testid="select-session-market"><SelectValue placeholder="انتخاب بازار" /></SelectTrigger>
@@ -193,9 +274,14 @@ export default function JournalSessions() {
               </div>
               <div className="space-y-2"><Label htmlFor="session-kind">نوع سشن</Label>
                 <Select value={form.sessionTypeOptionId} onValueChange={value => setForm(current => ({ ...current, sessionTypeOptionId: value }))}>
-                  <SelectTrigger id="session-kind" data-testid="select-session-type"><SelectValue placeholder="بدون دسته‌بندی" /></SelectTrigger>
-                  <SelectContent><SelectItem value="none">بدون دسته‌بندی</SelectItem>{sessionTypes.map(option => <SelectItem key={option.id} value={option.id}>{option.label}</SelectItem>)}</SelectContent>
+                  <SelectTrigger id="session-kind" data-testid="select-session-type"><SelectValue placeholder="تشخیص خودکار" /></SelectTrigger>
+                  <SelectContent><SelectItem value="auto">تشخیص خودکار از ساعت شروع</SelectItem><SelectItem value="none">بدون دسته‌بندی</SelectItem>{sessionTypes.map(option => <SelectItem key={option.id} value={option.id}>{option.label}</SelectItem>)}</SelectContent>
                 </Select>
+                {form.sessionTypeOptionId === 'auto' && detectedKind && <p className="text-xs text-muted-foreground" data-testid="text-detected-session-type">
+                  {detectedSessionTypeId
+                    ? <>تشخیص خودکار: <span className="font-medium text-foreground">{sessionTypes.find(option => option.id === detectedSessionTypeId)?.label ?? sessionKindLabel(detectedKind)}</span></>
+                    : `سشن ${sessionKindLabel(detectedKind)} تشخیص داده شد، اما گزینهٔ هم‌نامی در «نوع سشن» پیدا نشد؛ بدون دسته‌بندی ثبت می‌شود.`}
+                </p>}
               </div>
               <div className="space-y-2"><Label htmlFor="session-notes">یادداشت زمینه</Label><Textarea id="session-notes" rows={3} placeholder="چه چیزی را در بازار دنبال می‌کنید؟" value={form.notes} onChange={event => setForm(current => ({ ...current, notes: event.target.value }))} data-testid="input-session-notes" /></div>
               <div className="space-y-2"><Label>روان‌شناسی پیش از شروع</Label>
@@ -244,7 +330,7 @@ export default function JournalSessions() {
                         <div className="text-sm font-semibold">{accountById.get(session.accountId)?.name ?? 'حساب در دسترس نیست'}<span className="mx-2 text-muted-foreground">/</span>{boxById.get(session.tradingBoxId)?.name ?? 'باکس حذف‌شده'}</div>
                         <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
                           <span className="inline-flex items-center gap-1"><Target className="h-3.5 w-3.5" />{strategyById.get(session.strategyId)?.name ?? 'استراتژی حذف‌شده'}</span>
-                          <span className="inline-flex items-center gap-1"><CalendarDays className="h-3.5 w-3.5" />{faDate(session.startTime)}</span>
+                          <span className="inline-flex items-center gap-1"><CalendarDays className="h-3.5 w-3.5" />{formatDualDateTime(session.startTime)}</span>
                         </div>
                       </div>
                       <span className="mt-1 grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-border/70 text-muted-foreground transition group-hover:border-primary/40 group-hover:text-primary"><ArrowUpLeft className="h-4 w-4" /></span>

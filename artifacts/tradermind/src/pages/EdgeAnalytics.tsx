@@ -5,6 +5,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Skeleton } from '../components/ui/skeleton';
 import { db } from '../db/database';
+import { useAccountAnalyticsScope } from '../contexts/AccountAnalyticsContext';
 import { Trade, Strategy } from '../db/database';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -772,7 +773,7 @@ function RiskTab({ ext }: { ext: ExtendedAnalyticsResult }) {
         <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><Activity className="w-4 h-4 text-amber-400"/>MAE / MFE (بیشترین نوسان مطلوب/نامطلوب)</CardTitle></CardHeader>
         <CardContent>
           {mf.dataCount === 0 ? (
-            <EmptyState label="داده MAE/MFE موجود نیست. برای ثبت این داده، از بخش مانیتورینگ زنده استفاده کنید." />
+            <EmptyState label="داده MAE/MFE موجود نیست. آن را از بخش مانیتورینگ زنده یا از کارت «MFE / MAE» در مرور ژورنال هر معامله ثبت کنید." />
           ) : (
             <>
               <div className="grid grid-cols-2 gap-2 mb-3 sm:grid-cols-3">
@@ -1037,7 +1038,8 @@ function CalendarTab({ result, strategies, classified }: {
 // ── Main Component ─────────────────────────────────────────────────────────────
 
 export default function EdgeAnalytics() {
-  const [trades, setTrades]         = useState<Trade[]>([]);
+  const [loadedTrades, setTrades] = useState<Trade[]>([]);
+  const { scopedTrades: trades } = useAccountAnalyticsScope(loadedTrades);
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [loading, setLoading]       = useState(true);
   const [activeTab, setActiveTab]   = useState('edge');

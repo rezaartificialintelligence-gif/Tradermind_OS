@@ -1,4 +1,6 @@
 import Dexie, { Table } from 'dexie';
+import { installSyncHooks, backfillUpdatedAt } from './syncSupport';
+import { migrateToStableIds } from './migrateStableIds';
 
 // ── کمک: تبدیل Base64 dataUrl به Blob ──────────────────────────────────────
 export function dataUrlToBlob(dataUrl: string): Blob {
@@ -845,6 +847,8 @@ export interface ChartScreenshot {
   setup: string | null;
   strategy: string | null;
   tradeId: string | null;      // لینک به معامله مرتبط
+  sourceTradeScreenshotId?: string | null;
+  sourceMediaId?: string | null;
   screenshotType: string;      // ChartScreenshotType
   label: string | null;
   notes: string | null;
@@ -926,11 +930,16 @@ export interface Account {
   name: string;               // مثلاً «حساب اصلی» یا «دمو بروکر XYZ»
   broker: string;             // نام بروکر (اختیاری)
   currency: string;           // USD, EUR, ...
+  /** شمارهٔ حساب نزد بروکر (اختیاری) */
+  accountNumber?: string | null;
   initialBalance: number | null;
+  /** بالانس فعلی؛ وقتی بالانس اولیه ثبت شده باشد از جمع سود/زیان معاملات بسته‌شده خودکار به‌روز می‌شود. */
   currentBalance: number | null;
   color: string;              // رنگ شناسه‌ای
   isDefault: boolean;
   isArchived?: boolean;
+  /** Boxes explicitly available to this account; absent on legacy records. */
+  tradingBoxIds?: string[];
   notes: string | null;
   createdAt: number;
   updatedAt: number;
@@ -1008,6 +1017,20 @@ export interface JournalSessionAnalysis {
   tags: string;
   previousTradeId?: string | null;
   nextTradeId?: string | null;
+  /** اندازهٔ مومنتوم بازار (متن آزاد). */
+  momentumText?: string;
+  /** موقعیت فعلی قیمت (متن آزاد). */
+  pricePositionText?: string;
+  /** منطق جهت (متن آزاد). */
+  directionLogicText?: string;
+  /**
+   * JSON از نوع Record<fieldKey, string[]> برای فیلدهایی که کاربر آن‌ها را
+   * به‌صورت چک‌باکس تنظیم کرده است (مثلاً «نواحی پیش رو»).
+   */
+  fieldSelections?: string;
+  /** نتیجهٔ سناریو که بعد از پایان سشن ثبت می‌شود (دستهٔ scenario_outcome). */
+  scenarioOutcomeOptionId?: string | null;
+  scenarioOutcomeNote?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -1017,6 +1040,11 @@ export interface JournalTriggerEvent {
   sessionId: string;
   timeframeOptionId: string;
   analysisEventId: string | null;
+  /**
+   * همهٔ رویدادهای تحلیلِ مرتبط با این تریگر (چند تایم‌فریم).
+   * analysisEventId همچنان اولین مورد را برای سازگاری با داده‌های قبلی نگه می‌دارد.
+   */
+  analysisEventIds?: string[];
   triggerTypeOptionId: string | null;
   description: string;
   marketMovement: string;
@@ -1753,10 +1781,24 @@ class TraderMindDB extends Dexie {
         if (item.reviewId === undefined) item.reviewId = null;
       });
     });
+
+    // v26 — آماده‌سازی همگام‌سازی: updatedAt برای همه رکوردها + ثبت حذف‌ها
+    this.version(26).stores({
+      syncTombstones: 'id, table, deletedAt',
+      syncMeta: 'key',
+    }).upgrade(async tx => {
+      await backfillUpdatedAt(tx, this.tables.map(t => t.name));
+    });
+
+    // v27 — شناسه‌ی ثابت برای رکوردهای پیش‌فرض (گزینه‌ها، حساب، چک‌لیست، مجموعه‌ها)
+    this.version(27).stores({}).upgrade(async tx => {
+      await migrateToStableIds(tx, this.tables.map(t => t.name));
+    });
   }
 }
 
 export const db = new TraderMindDB();
+installSyncHooks(db);
 
 /** مقادیر پیش‌فرض */
 export const defaultPreTradingState: PreTradingState = {

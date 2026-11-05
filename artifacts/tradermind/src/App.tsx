@@ -25,6 +25,19 @@ function useElectronHashLocation(): [string, (to: string) => void] {
   const navigate = useCallback((to: string) => { window.location.hash = to; }, []);
   return [path, navigate];
 }
+// اپ اندروید (Capacitor) و ویندوز (Electron) هر دو از مسیریابی هش استفاده می‌کنند.
+// دلیل: در اندروید base برابر './' می‌شد و Wouter آن را '.' می‌خواند؛ در نتیجه هیچ صفحه‌ای match نمی‌شد.
+function isNativeShell(): boolean {
+  if (window.location.protocol === 'file:') return true;
+  const cap = (window as unknown as { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor;
+  return Boolean(cap?.isNativePlatform?.());
+}
+
+function getWebRouterBase(): string | undefined {
+  const raw = import.meta.env.BASE_URL || '/';
+  if (raw.startsWith('.')) return undefined;
+  return raw.replace(/\/$/, '');
+}
 import { ThemeProvider } from './components/ThemeProvider';
 import { Layout } from './components/Layout';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -36,6 +49,7 @@ import { reminderService } from './services/reminderService';
 import { normalizeExistingTrades } from './services/tradeNormalizationService';
 import { clearChunkRecoveryMarker, isChunkLoadError, recoverFromChunkLoadError } from './lib/runtimeRecovery';
 import ScreenshotErrorBoundary from './components/errorBoundaries/ScreenshotErrorBoundary';
+import { SyncRuntime } from './sync/SyncRuntime';
 
 // ── Lazy-loaded pages (code splitting برای بارگذاری سریع‌تر)
 function lazyWithRecovery<T extends ComponentType<any>>(
@@ -68,6 +82,7 @@ const TradeDetail      = lazyWithRecovery(() => import('./pages/TradeDetail'), '
 const DailyJournalList = lazyWithRecovery(() => import('./pages/DailyJournalList'), 'DailyJournalList');
 const DailyEntry       = lazyWithRecovery(() => import('./pages/DailyEntry'), 'DailyEntry');
 const Reports          = lazyWithRecovery(() => import('./pages/Reports'), 'Reports');
+const ReportsCenter    = lazyWithRecovery(() => import('./pages/ReportsCenter'), 'ReportsCenter');
 const SymbolsList      = lazyWithRecovery(() => import('./pages/SymbolsList'), 'SymbolsList');
 const SymbolKnowledge  = lazyWithRecovery(() => import('./pages/SymbolKnowledge'), 'SymbolKnowledge');
 const BackupRestore    = lazyWithRecovery(() => import('./pages/BackupRestore'), 'BackupRestore');
@@ -248,7 +263,8 @@ function Router() {
           <Route path="/journal/daily/:date" component={DailyEntry} />
           <Route path="/journal/insights" component={TradeInsights} />
 
-          <Route path="/reports" component={Reports} />
+          <Route path="/reports" component={ReportsCenter} />
+          <Route path="/reports/classic" component={Reports} />
           <Route path="/analytics/edge" component={EdgeAnalytics} />
           <Route path="/analytics/advanced" component={AdvancedAnalytics} />
           <Route path="/profile" component={TraderProfile} />
@@ -315,6 +331,7 @@ function AppContent() {
   return (
     <>
       <AutoLockManager />
+      <SyncRuntime />
       {/* اگر قفل فعال و بسته باشد، صفحه قفل نمایش داده می‌شود */}
       {isEnabled && isLocked && <LockScreen />}
       <Router />
@@ -340,8 +357,8 @@ function App() {
         <ThemeProvider>
           <TooltipProvider>
             <WouterRouter
-              hook={window.location.protocol === 'file:' ? useElectronHashLocation : undefined}
-              base={window.location.protocol === 'file:' ? undefined : import.meta.env.BASE_URL.replace(/\/$/, '')}
+              hook={isNativeShell() ? useElectronHashLocation : undefined}
+              base={isNativeShell() ? undefined : getWebRouterBase()}
             >
               <NavigationGuardProvider>
                 <AppContent />

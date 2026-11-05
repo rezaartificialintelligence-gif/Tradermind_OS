@@ -18,8 +18,9 @@ import {
   SlidersHorizontal, Calendar, Clock, Globe2, Users, MonitorUp
 } from 'lucide-react';
 import { db, ChartScreenshot, ScreenshotCollection, VisualPattern, ScreenshotGroup, Trade } from '../db/database';
+import { computeMetrics } from '../core/metrics/engine';
 import {
-  getAllChartScreenshots, saveChartScreenshot, updateChartScreenshot, deleteChartScreenshot,
+  getAllChartScreenshots, backfillScreenshotLibrary, saveChartScreenshot, updateChartScreenshot, deleteChartScreenshot,
   getAllCollections, saveCollection, updateCollection, deleteCollection, addToCollection, removeFromCollection,
   getAllPatterns, savePattern, updatePattern, deletePattern,
   getAllGroups, saveGroup, updateGroup, deleteGroup,
@@ -194,7 +195,7 @@ function GalleryTab({ allTrades, onRefresh }: { allTrades: Trade[]; onRefresh: (
 
   const { data: screenshots = [] } = useQuery<ChartScreenshot[]>({
     queryKey: ['chart-screenshots'],
-    queryFn: getAllChartScreenshots,
+    queryFn: async () => { await backfillScreenshotLibrary(); return getAllChartScreenshots(); },
   });
 
   const { data: collections = [] } = useQuery<ScreenshotCollection[]>({
@@ -782,7 +783,7 @@ function GroupsTab() {
 
   const { data: allChartSS = [] } = useQuery<ChartScreenshot[]>({
     queryKey: ['chart-screenshots'],
-    queryFn: getAllChartScreenshots,
+    queryFn: async () => { await backfillScreenshotLibrary(); return getAllChartScreenshots(); },
   });
 
   const createGroup = async () => {
@@ -937,7 +938,7 @@ function PatternsTab({ allTrades }: { allTrades: Trade[] }) {
   });
   const { data: allChartSS = [] } = useQuery<ChartScreenshot[]>({
     queryKey: ['chart-screenshots'],
-    queryFn: getAllChartScreenshots,
+    queryFn: async () => { await backfillScreenshotLibrary(); return getAllChartScreenshots(); },
   });
 
   const createPattern = async () => {
@@ -1039,9 +1040,8 @@ function PatternsTab({ allTrades }: { allTrades: Trade[] }) {
             const ssIds = safeJson<string[]>(p.screenshotIds, []);
             const tradeIds = safeJson<string[]>(p.relatedTradeIds, []);
             const relatedTrades = allTrades.filter(t => tradeIds.includes(t.id) && t.status === 'closed');
-            const wins = relatedTrades.filter(t => t.result === 'win' || t.result === 'partial-win').length;
-            const rVals = relatedTrades.map(t => t.rMultiple).filter((r): r is number => r !== null);
-            const avgR = rVals.length > 0 ? rVals.reduce((a, b) => a + b, 0) / rVals.length : null;
+            const tradeMetrics = computeMetrics(relatedTrades);
+            const avgR = tradeMetrics.avgR;
             const ssInPattern = allChartSS.filter(s => ssIds.includes(s.id));
 
             return (
@@ -1070,8 +1070,8 @@ function PatternsTab({ allTrades }: { allTrades: Trade[] }) {
                       <p className="text-muted-foreground">معامله</p>
                     </div>
                     <div className="p-2 rounded-lg bg-white/3">
-                      <p className={cn('text-base font-bold', relatedTrades.length > 0 ? (wins / relatedTrades.length >= 0.5 ? 'text-green-400' : 'text-red-400') : '')}>
-                        {relatedTrades.length > 0 ? `${Math.round((wins / relatedTrades.length) * 100)}٪` : '—'}
+                      <p className={cn('text-base font-bold', tradeMetrics.winRate !== null ? (tradeMetrics.winRate >= 0.5 ? 'text-green-400' : 'text-red-400') : '')}>
+                        {tradeMetrics.winRate !== null ? `${Math.round(tradeMetrics.winRate * 100)}٪` : '—'}
                       </p>
                       <p className="text-muted-foreground">نرخ برد</p>
                     </div>
@@ -1139,7 +1139,7 @@ function CollectionsTab() {
   });
   const { data: allChartSS = [] } = useQuery<ChartScreenshot[]>({
     queryKey: ['chart-screenshots'],
-    queryFn: getAllChartScreenshots,
+    queryFn: async () => { await backfillScreenshotLibrary(); return getAllChartScreenshots(); },
   });
 
   const createCollection = async () => {

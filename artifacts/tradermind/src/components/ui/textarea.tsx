@@ -1,11 +1,13 @@
 import * as React from 'react';
 import { cn } from '@/lib/utils';
 import { captureInputSelection, restoreInputSelection } from '@/lib/inputSelection';
+import { VoiceTypingButton } from './VoiceTypingButton';
 
 export interface TextareaProps extends React.ComponentProps<'textarea'> {}
 
 const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
   ({ className, inputMode, autoCorrect, spellCheck, enterKeyHint, wrap, onChange, ...props }, ref) => {
+    const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
     const handleChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
       const target = event.currentTarget;
        const selection = captureInputSelection(target);
@@ -17,7 +19,13 @@ const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
       });
     };
 
-    return (
+    const setRefs = (node: HTMLTextAreaElement | null) => {
+      textareaRef.current = node;
+      if (typeof ref === 'function') ref(node);
+      else if (ref) ref.current = node;
+    };
+
+    const textarea = (
       <textarea
         inputMode={inputMode ?? 'text'}
         autoCorrect={autoCorrect ?? 'on'}
@@ -31,10 +39,19 @@ const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
         'disabled:cursor-not-allowed disabled:opacity-50 md:text-sm',
           className,
         )}
-        ref={ref}
+        ref={setRefs}
         onChange={handleChange}
         {...props}
       />
+    );
+    if (props.disabled || props.readOnly) return textarea;
+    return (
+      <div className="w-full space-y-0.5">
+        <div className="flex h-5 justify-end">
+          <VoiceTypingButton targetRef={textareaRef} />
+        </div>
+        {textarea}
+      </div>
     );
   },
 );

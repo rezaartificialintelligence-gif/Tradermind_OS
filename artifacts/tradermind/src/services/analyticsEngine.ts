@@ -23,7 +23,8 @@ import {
   BaseMetrics,
 } from './performanceService';
 import { computeAnalytics, filterTradesByRange, TimeRangeKey, AnalyticsData } from './analyticsService';
-import { isWin, isLoss, isClosed } from '../lib/tradeHelpers';
+import { isClosed } from '../lib/tradeHelpers';
+import { computeMetrics } from '../core/metrics/engine';
 import { computeTraderProfile } from './traderProfileService';
 import { getTradingDateKey } from '../lib/tradingTime';
 
@@ -210,12 +211,7 @@ export function getUniqueTimeframes(trades: Trade[]): string[] {
 
 /** خلاصه سریع برای Dashboard header cards — بدون DB call */
 export function getQuickSummary(trades: Trade[]) {
-  const closed = trades.filter(isClosed);
-  const wins = closed.filter(isWin);
-  const withR = closed.filter(t => t.rMultiple !== null);
-  const withPnL = closed.filter(t => t.profitLoss !== null);
-  const winRate = closed.length > 0 ? wins.length / closed.length : null;
-  const avgR = withR.length > 0 ? withR.reduce((s, t) => s + t.rMultiple!, 0) / withR.length : null;
-  const totalPnL = withPnL.length > 0 ? withPnL.reduce((s, t) => s + t.profitLoss!, 0) : null;
-  return { total: closed.length, wins: wins.length, winRate, avgR, totalPnL };
+  const m = computeMetrics(trades);
+  // totalPnL: null وقتی هیچ معامله‌ای P/L ندارد (سود خالص)
+  return { total: m.count, wins: m.winCount, winRate: m.winRate, avgR: m.avgR, totalPnL: m.count > 0 ? m.netPnl : null };
 }

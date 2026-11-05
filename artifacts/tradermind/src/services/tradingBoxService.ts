@@ -1,8 +1,16 @@
 import Dexie from 'dexie';
-import { db, TradingBox } from '../db/database';
+import { Account, db, TradingBox } from '../db/database';
 
 function uuid(): string {
   return crypto.randomUUID();
+}
+
+export function isTradingBoxAvailableForAccount(box: TradingBox, account: Account | undefined): boolean {
+  if (!account) return !box.accountId;
+  if (!box.accountId) return true;
+  if (box.accountId === account.id) return true;
+  if (Array.isArray(account.tradingBoxIds)) return account.tradingBoxIds.includes(box.id);
+  return false;
 }
 
 export const tradingBoxService = {

@@ -4,6 +4,7 @@
 @plugin "@tailwindcss/typography";
 
 @custom-variant dark (&:is(.dark *));
+@custom-variant neon (&:is(.neon *));
 
 @theme inline {
   --color-background: hsl(var(--background));
@@ -419,4 +420,326 @@ textarea:focus-visible,
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TraderMind Design System — فاز ۱
+   سه تم: light | dark | neon (neon = واریانت تیره + کلاس dark هم دارد).
+   رنگ اصلی (--primary) همیشه از انتخابگر ۵ رنگ می‌آید و در هر سه تم کار می‌کند.
+   توکن‌های --tm-* فقط «سطح» را تعریف می‌کنند؛ رنگ برند از --primary می‌آید.
+   ═══════════════════════════════════════════════════════════════════════════ */
+:root {
+  --tm-radius-panel: 1.25rem;
+  --tm-radius-inner: 0.875rem;
+  --tm-radius-control: 0.625rem;
+  --tm-blur: 0px;
+  --tm-panel-bg: hsl(var(--card));
+  --tm-panel-inner-bg: hsl(var(--muted) / 0.55);
+  --tm-edge: hsl(var(--border));
+  --tm-edge-strong: hsl(var(--primary) / 0.35);
+  --tm-shadow: 0 8px 24px hsl(222 40% 3% / 0.07);
+  --tm-glow: 0 0 0 0 transparent;
+  --tm-positive: 142 71% 38%;
+  --tm-negative: 0 84% 55%;
+  --tm-info: 217 91% 55%;
+  --tm-motion-fast: 140ms;
+}
+
+.dark {
+  --tm-panel-bg: linear-gradient(150deg, hsl(var(--card) / 0.98), hsl(222 30% 9% / 0.96));
+  --tm-panel-inner-bg: hsl(222 30% 8% / 0.7);
+  --tm-edge: hsl(var(--border));
+  --tm-shadow: 0 14px 34px hsl(222 45% 2% / 0.28);
+  --tm-positive: 152 70% 48%;
+  --tm-negative: 350 90% 62%;
+  --tm-info: 202 100% 58%;
+}
+
+/* ── تم نئون ۳D: پالت از تصویر مرجع (#030914 / #061321 / #071B2D / #04111F) ── */
+.neon {
+  --background: 219 74% 5%;
+  --foreground: 213 100% 97%;
+  --border: 190 55% 22%;
+  --card: 208 73% 10%;
+  --card-foreground: 213 100% 97%;
+  --card-border: 190 55% 24%;
+  --popover: 208 73% 9%;
+  --popover-foreground: 213 100% 97%;
+  --popover-border: 190 55% 24%;
+  --secondary: 211 69% 12%;
+  --secondary-foreground: 213 100% 97%;
+  --muted: 211 77% 8%;
+  --muted-foreground: 212 30% 67%;
+  --accent: 211 60% 14%;
+  --accent-foreground: 213 100% 97%;
+  --destructive: 348 100% 63%;
+  --input: 211 60% 16%;
+  --sidebar: 219 74% 5%;
+  --sidebar-foreground: 213 100% 97%;
+  --sidebar-border: 190 55% 22%;
+  --sidebar-accent: 211 60% 14%;
+  --sidebar-accent-foreground: 213 100% 97%;
+  --chart-2: 166 100% 42%;
+  --chart-3: 348 100% 63%;
+  --chart-4: 202 100% 55%;
+
+  --tm-blur: 12px;
+  --tm-panel-bg: linear-gradient(155deg, hsl(208 73% 11% / 0.78), hsl(211 77% 7% / 0.86));
+  --tm-panel-inner-bg: hsl(211 77% 6% / 0.72);
+  --tm-edge: hsl(var(--primary) / 0.28);
+  --tm-edge-strong: hsl(var(--primary) / 0.6);
+  --tm-shadow: 0 18px 40px hsl(219 80% 2% / 0.55), inset 0 1px 0 hsl(0 0% 100% / 0.04);
+  --tm-glow: 0 0 22px hsl(var(--primary) / 0.14);
+  --tm-positive: 166 100% 45%;
+  --tm-negative: 348 100% 63%;
+  --tm-info: 202 100% 58%;
+}
+
+.neon body {
+  background-image:
+    radial-gradient(60rem 30rem at 85% -5%, hsl(var(--primary) / 0.12), transparent 60%),
+    radial-gradient(48rem 26rem at 8% 100%, hsl(var(--chart-4) / 0.08), transparent 60%);
+  background-repeat: no-repeat;
+}
+
+/* ── سطوح مشترک ── */
+.tm-panel {
+  position: relative;
+  background: var(--tm-panel-bg);
+  border: 1px solid var(--tm-edge);
+  border-radius: var(--tm-radius-panel);
+  box-shadow: var(--tm-shadow), var(--tm-glow);
+  -webkit-backdrop-filter: blur(var(--tm-blur));
+  backdrop-filter: blur(var(--tm-blur));
+  transition: border-color var(--tm-motion-fast) ease, box-shadow var(--tm-motion-fast) ease, transform var(--tm-motion-fast) ease;
+}
+.tm-panel[data-interactive="true"]:hover {
+  border-color: var(--tm-edge-strong);
+  transform: translateY(-2px);
+}
+.neon .tm-panel::before {
+  /* نور لبه‌ی بالا-راست؛ فقط تزئین، کم‌هزینه (بدون blur اضافه) */
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(22rem 8rem at 100% 0%, hsl(var(--primary) / 0.12), transparent 70%);
+}
+.tm-panel-inner {
+  background: var(--tm-panel-inner-bg);
+  border: 1px solid hsl(var(--border) / 0.7);
+  border-radius: var(--tm-radius-inner);
+}
+.tm-pos { color: hsl(var(--tm-positive)); }
+.tm-neg { color: hsl(var(--tm-negative)); }
+.tm-info { color: hsl(var(--tm-info)); }
+.tm-num { font-variant-numeric: tabular-nums; direction: ltr; unicode-bidi: isolate; }
+
+/* کارت قدیمی در نئون هم از سطح شیشه‌ای استفاده کند تا صفحات مهاجرت‌نشده هم‌هویت بمانند */
+.neon .tradermind-card {
+  background: var(--tm-panel-bg);
+  border-color: var(--tm-edge);
+  box-shadow: var(--tm-shadow);
+}
+
+/* هزینه‌ی رندر: روی موبایل blur حذف می‌شود (نیاز عملکردی اندروید) */
+@media (max-width: 767px) {
+  :root, .neon { --tm-blur: 0px; }
+  .neon .tm-panel { background: linear-gradient(155deg, hsl(208 73% 11% / 0.96), hsl(211 77% 7% / 0.98)); }
+  .tm-panel[data-interactive="true"]:hover { transform: none; }
+}
+@media (hover: none) {
+  .tm-panel[data-interactive="true"]:hover { transform: none; }
+}
+
+/* ═══ Shell (فاز ۲): ریل ناوبری شناور + هدر + نوارهای موبایل ═══ */
+:root {
+  --tm-rail-w: 12.5rem;
+  --tm-gap: 0.75rem;
+  --tm-header-h: 3.75rem;
+}
+.tm-rail {
+  position: fixed;
+  top: var(--tm-gap);
+  bottom: var(--tm-gap);
+  right: var(--tm-gap);
+  width: var(--tm-rail-w);
+}
+@media (min-width: 768px) {
+  .tm-main { padding-right: calc(var(--tm-rail-w) + var(--tm-gap) * 2); padding-bottom: 0 !important; }
+  .tm-header-slot { position: sticky; top: var(--tm-gap); z-index: 30; padding: var(--tm-gap) var(--tm-gap) 0 calc(var(--tm-gap) + 0.75rem); margin-top: 0; }
+  .tm-header { height: var(--tm-header-h); }
+}
+@media (min-width: 768px) and (max-width: 1023px) {
+  :root { --tm-rail-w: 11rem; }
+}
+
+.tm-nav-item {
+  display: flex; align-items: center; gap: 0.625rem; width: 100%;
+  min-height: 2.5rem; padding: 0 0.75rem; border-radius: 0.75rem;
+  border: 1px solid transparent; background: transparent;
+  font-size: 13px; font-weight: 500; text-align: right;
+  color: hsl(var(--muted-foreground));
+  transition: background-color var(--tm-motion-fast) ease, color var(--tm-motion-fast) ease, border-color var(--tm-motion-fast) ease, box-shadow var(--tm-motion-fast) ease;
+}
+.tm-nav-item:hover { background: hsl(var(--muted) / 0.6); color: hsl(var(--foreground)); }
+.tm-nav-item[data-active="true"] {
+  background: hsl(var(--primary) / 0.14); color: hsl(var(--primary));
+  border-color: hsl(var(--primary) / 0.35);
+}
+.neon .tm-nav-item[data-active="true"] {
+  background: linear-gradient(90deg, hsl(var(--primary) / 0.28), hsl(var(--primary) / 0.1));
+  border-color: hsl(var(--primary) / 0.55);
+  box-shadow: 0 0 16px hsl(var(--primary) / 0.22), inset 0 0 0 1px hsl(var(--primary) / 0.08);
+}
+
+.tm-input {
+  background: var(--tm-panel-inner-bg); color: hsl(var(--foreground));
+  border: 1px solid hsl(var(--border) / 0.8); border-radius: var(--tm-radius-control);
+  outline: none; transition: border-color var(--tm-motion-fast) ease, box-shadow var(--tm-motion-fast) ease;
+}
+.tm-input::placeholder { color: hsl(var(--muted-foreground)); }
+.tm-input:focus-visible { border-color: hsl(var(--primary) / 0.6); box-shadow: 0 0 0 3px hsl(var(--primary) / 0.18); outline: none; }
+
+.tm-icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 2.25rem; height: 2.25rem; border-radius: 0.75rem;
+  color: hsl(var(--muted-foreground)); border: 1px solid transparent; background: transparent;
+  transition: background-color var(--tm-motion-fast) ease, color var(--tm-motion-fast) ease, border-color var(--tm-motion-fast) ease;
+}
+.tm-icon-btn:hover { background: hsl(var(--muted) / 0.6); color: hsl(var(--primary)); border-color: hsl(var(--primary) / 0.3); }
+.tm-icon-btn:active { transform: scale(0.96); }
+
+/* نوارهای موبایل (بالا/پایین) هم‌هویت با تم */
+.tm-bar { background: hsl(var(--background) / 0.94); border-color: var(--tm-edge); }
+.neon .tm-bar { background: linear-gradient(180deg, hsl(208 73% 9% / 0.97), hsl(219 74% 5% / 0.99)); }
+.neon nav.tm-bar { box-shadow: 0 -6px 24px hsl(var(--primary) / 0.08); }
+
+/* پنل‌های شناور (Popover/منو) باید مات باشند تا محتوای پشتشان خوانایی را خراب نکند */
+.tm-panel.tm-panel-solid { background: hsl(var(--popover)); -webkit-backdrop-filter: none; backdrop-filter: none; }
+
+
+/* فرم ثبت معامله (فاز ۳): هر بخش یک پنل شیشه‌ای؛ بدون تغییر منطق فرم */
+.tm-trade-form > section {
+  position: relative;
+  background: var(--tm-panel-bg);
+  border: 1px solid var(--tm-edge);
+  border-radius: var(--tm-radius-panel);
+  box-shadow: var(--tm-shadow);
+  padding: 1.1rem 1.25rem 1.25rem;
+  min-width: 0;
+}
+.tm-trade-form > section > h2 {
+  font-size: 0.9rem; font-weight: 600; margin-bottom: 0.25rem;
+  border-bottom-color: hsl(var(--border) / 0.6);
+}
+@media (max-width: 767px) {
+  .tm-trade-form > section { padding: 0.9rem 0.9rem 1rem; border-radius: 1rem; }
+}
+
+
+/* تنظیمات ظاهری: شفافیت شیشه‌ای و انیمیشن‌های نرم (فاز ۴) */
+.tm-no-glass { --tm-blur: 0px; }
+.tm-no-glass .tm-panel { background: hsl(var(--card)); }
+.tm-no-glass.neon .tm-panel { background: linear-gradient(155deg, hsl(208 73% 11% / 0.98), hsl(211 77% 7% / 0.99)); }
+.tm-no-glass.neon .tradermind-card { background: hsl(var(--card)); }
+.tm-no-motion *, .tm-no-motion *::before, .tm-no-motion *::after {
+  transition-duration: 0.01ms !important;
+  animation-duration: 0.01ms !important;
+  animation-delay: 0ms !important;
+}
+.tm-no-motion .animate-spin { animation-duration: 1s !important; }
+.tm-no-motion .tm-panel[data-interactive="true"]:hover { transform: none; }
+
+
+/* کارت KPI در نئون: لبه و درخشش درونی پررنگ‌تر (مطابق مرجع) */
+.neon .tm-kpi {
+  border-color: hsl(var(--primary) / 0.5);
+  box-shadow: var(--tm-shadow), 0 0 18px hsl(var(--primary) / 0.16), inset 0 0 24px hsl(var(--primary) / 0.07);
+}
+.neon .tm-kpi svg { filter: drop-shadow(0 0 6px hsl(var(--primary) / 0.55)); }
+.tm-no-glass.neon .tm-kpi svg { filter: none; }
+@media (max-width: 767px) { .neon .tm-kpi svg { filter: none; } }
+
+
+/* فیلد تاریخ و ساعت: دکمهٔ انتخاب تقویم/ساعت هنگام کوچک‌بودن ستون پنهان نشود */
+input[type="datetime-local"],
+input[type="date"],
+input[type="time"] {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+}
+input[type="datetime-local"]::-webkit-calendar-picker-indicator,
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="time"]::-webkit-calendar-picker-indicator {
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+/* فرم معامله: هر ستون/کادر می‌تواند کوچک شود و محتوایش از کادر بیرون نزند */
+.tm-trade-form > * { min-width: 0; }
+.tm-trade-form input,
+.tm-trade-form select,
+.tm-trade-form textarea,
+.tm-trade-form button[role="combobox"] { max-width: 100%; }
+
+/*
+ * صفحهٔ سشن‌های معاملاتی روی موبایل:
+ * هر عنصر عریض (فیلد تاریخ، برچسب‌های بلند، متن‌های بدون شکست) می‌توانست کل صفحه را
+ * از عرض صفحهٔ نمایش بزرگ‌تر کند؛ نتیجه «زوم‌شدن» و نیاز به کشیدن چپ و راست بود، و
+ * ضربه روی چک‌باکس‌ها هم صفحه را به سمت دیگر می‌پراند.
+ */
+html,
+body {
+  overflow-x: clip;
+}
+.tm-session-page {
+  min-width: 0;
+  max-width: 100%;
+}
+.tm-session-page :where(.grid, .flex) > :where(div, section, form, article, p, h1, h2, h3, h4, label, button[role="combobox"]) {
+  min-width: 0;
+}
+.tm-session-page :where(input, select, textarea, button[role="combobox"]) {
+  max-width: 100%;
+}
+.tm-session-page :where(p, h1, h2, h3, h4, label, .whitespace-pre-wrap) {
+  overflow-wrap: anywhere;
+}
+/* ضربه روی چک‌باکس/برچسب نباید صفحه را جابه‌جا کند */
+.tm-session-page input[type="checkbox"] {
+  flex-shrink: 0;
+  scroll-margin: 0;
+}
+
+/*
+ * منوی کشویی موبایل در حالت بسته با translateX(100%) بیرون از لبهٔ راست صفحه می‌ماند.
+ * در اندروید (RTL) همین بخش بیرون‌زده به «عرض اضافه» برای صفحه تبدیل می‌شود و صفحه را
+ * شبیه زوم‌شده می‌کند و باید به راست اسکرول شود. حالت بسته اصلاً در چیدمان شرکت نمی‌کند
+ * و فقط هنگام باز شدن با انیمیشن نمایش داده می‌شود.
+ */
+.tradermind-mobile-drawer:not([data-open="true"]) {
+  display: none !important;
+}
+.tradermind-mobile-drawer[data-open="true"] {
+  animation: tm-drawer-in 240ms ease-out;
+}
+@keyframes tm-drawer-in {
+  from { transform: translate3d(100%, 0, 0); }
+  to { transform: translate3d(0, 0, 0); }
+}
+/* روی دسکتاپ منوی کشویی موبایل هرگز نمایش داده نمی‌شود (ناوبری دسکتاپ NavRail است). */
+@media (min-width: 768px) {
+  .tradermind-mobile-drawer {
+    display: none !important;
+    animation: none;
+  }
+}
+.tm-main {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: clip;
 }

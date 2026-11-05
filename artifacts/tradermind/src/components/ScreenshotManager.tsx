@@ -37,6 +37,7 @@ import {
   LifecycleComparison,
 } from '../services/visualAnalysisService';
 import { compressImage } from '../lib/imageCompression';
+import { deleteChartScreenshot, saveTradeScreenshotToLibrary } from '../services/screenshotIntelligenceService';
 import AnnotationCanvas from './AnnotationCanvas';
 import VisualFeatureEditor from './VisualFeatureEditor';
 import VisualComparisonView from './VisualComparisonView';
@@ -178,7 +179,8 @@ export default function ScreenshotManager({
           createdAt: Date.now(),
         };
 
-        newScreenshots.push(ss);
+        const libraryScreenshot = await saveTradeScreenshotToLibrary(trade, ss);
+        newScreenshots.push(libraryScreenshot ? { ...ss, libraryScreenshotId: libraryScreenshot.id } : ss);
       }
 
       const updated = [...screenshots, ...newScreenshots];
@@ -301,10 +303,16 @@ export default function ScreenshotManager({
     // Sync activeView state stays open
   };
 
-  const deleteScreenshot = (id: string) => {
-    const updated = screenshots.filter(s => s.id !== id);
-    save(updated);
-    if (activeView?.screenshotId === id) setActiveView(null);
+  const deleteScreenshot = async (id: string) => {
+    const screenshot = screenshots.find(item => item.id === id);
+    try {
+      if (screenshot?.libraryScreenshotId) await deleteChartScreenshot(screenshot.libraryScreenshotId);
+      const updated = screenshots.filter(s => s.id !== id);
+      save(updated);
+      if (activeView?.screenshotId === id) setActiveView(null);
+    } catch {
+      toast.error('حذف اسکرین‌شات از کتابخانه انجام نشد.');
+    }
   };
 
   // ── Active screenshot ────────────────────────────────────────────
@@ -718,16 +726,25 @@ export default function ScreenshotManager({
             {/* Tab: View */}
             {activeView.tab === 'view' && (
               <div className="space-y-3">
-                <div className="rounded-lg overflow-hidden border border-white/10">
-                  <StoredImage
-                    source={activeSS.dataUrl}
-                    alt={activeSS.label}
-                    enableViewer
-                    showDownload
-                    filename={activeSS.label || 'trade-screenshot'}
-                    className="w-full h-auto max-h-[60vh] object-contain bg-black/20"
+                {(activeSS.annotations?.length ?? 0) > 0 ? (
+                  <AnnotationCanvas
+                    imageDataUrl={activeSS.dataUrl}
+                    annotations={activeSS.annotations}
+                    onChange={() => undefined}
+                    readOnly
                   />
-                </div>
+                ) : (
+                  <div className="rounded-lg overflow-hidden border border-white/10">
+                    <StoredImage
+                      source={activeSS.dataUrl}
+                      alt={activeSS.label}
+                      enableViewer
+                      showDownload
+                      filename={activeSS.label || 'trade-screenshot'}
+                      className="w-full h-auto max-h-[60vh] object-contain bg-black/20"
+                    />
+                  </div>
+                )}
                 {activeSS.analysisNotes && (
                   <p className="text-xs text-muted-foreground leading-relaxed">{activeSS.analysisNotes}</p>
                 )}

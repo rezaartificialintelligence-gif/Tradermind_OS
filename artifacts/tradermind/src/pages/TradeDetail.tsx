@@ -21,6 +21,8 @@ import { format } from "date-fns";
 import ScreenshotManager from "../components/ScreenshotManager";
 import { TradeScreenshot } from "../types/screenshot";
 import { getNetPnl } from "../lib/tradeHelpers";
+import { VoiceTypingButton } from "../components/ui/VoiceTypingButton";
+import { SessionAnalysisPanel } from "../components/journal/SessionAnalysisPanel";
 
 // نگاشت ID احساس (انگلیسی) به برچسب فارسی برای نمایش
 const EMOTION_LABELS_FA: Record<string, string> = {
@@ -599,6 +601,9 @@ export default function TradeDetail() {
             </Card>
           )}
 
+          {/* ── تحلیل‌های چندبازه‌ای ثبت‌شده در سشن معاملاتی ── */}
+          {trade.journalSessionId && <SessionAnalysisPanel tradeId={trade.id} journalSessionId={trade.journalSessionId} />}
+
           {/* ── تایم‌لاین رویدادها ── */}
           <Card>
             <CardHeader className="pb-3">
@@ -610,14 +615,17 @@ export default function TradeDetail() {
             <CardContent className="space-y-4">
               {/* افزودن یادداشت جدید */}
               <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={newEventNote}
-                  onChange={e => setNewEventNote(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && handleAddEvent()}
-                  placeholder="یادداشت جدید بزنید…"
-                  className="flex-1 h-8 rounded-md border border-input bg-background px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
-                />
+                <div className="min-w-0 flex-1 space-y-0.5">
+                  <div className="flex h-5 justify-end"><VoiceTypingButton /></div>
+                  <input
+                    type="text"
+                    value={newEventNote}
+                    onChange={e => setNewEventNote(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && handleAddEvent()}
+                    placeholder="یادداشت جدید بزنید…"
+                    className="h-8 w-full rounded-md border border-input bg-background px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                  />
+                </div>
                 <Button size="sm" onClick={handleAddEvent} disabled={addingEvent || !newEventNote.trim()} className="h-8 gap-1">
                   <Plus className="w-3.5 h-3.5" />
                 </Button>

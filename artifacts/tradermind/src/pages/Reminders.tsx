@@ -1,12 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Bell, BellOff, CalendarClock, Plus, Trash2, ShieldCheck, ShieldAlert } from 'lucide-react';
+import { Bell, BellOff, CalendarClock, Plus, Trash2, ShieldCheck, ShieldAlert, Volume2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Textarea } from '../components/ui/textarea';
-import { reminderService, type Reminder } from '../services/reminderService';
+import {
+  getReminderCustomSound,
+  previewReminderCustomSound,
+  reminderService,
+  setReminderCustomSound,
+  type Reminder,
+} from '../services/reminderService';
 
 function formatReminderDate(timestamp: number): string {
   return new Date(timestamp).toLocaleString('fa-IR', {
@@ -27,6 +33,9 @@ export default function Reminders() {
   const [scheduledAt, setScheduledAt] = useState(() => toDateTimeLocal(new Date(Date.now() + 60 * 60 * 1000)));
   const [busy, setBusy] = useState(false);
   const [permission, setPermission] = useState<'granted' | 'default' | 'denied' | 'unsupported'>('default');
+  const [customSound, setCustomSound] = useState<string | null>(() => getReminderCustomSound());
+  const [soundName, setSoundName] = useState('صدای انتخاب‌شده');
+  const [soundBusy, setSoundBusy] = useState(false);
 
   const reload = () => setReminders(reminderService.list());
   useEffect(() => {
@@ -67,6 +76,37 @@ export default function Reminders() {
     }
   };
 
+  const chooseCustomSound = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('audio/')) { toast.error('یک فایل صوتی انتخاب کنید.'); return; }
+    if (file.size > 1_500_000) { toast.error('حجم فایل صوتی باید کمتر از ۱٫۵ مگابایت باشد.'); return; }
+    setSoundBusy(true);
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('فایل قابل خواندن نیست.'));
+        reader.onerror = () => reject(new Error('خواندن فایل صوتی ناموفق بود.'));
+        reader.readAsDataURL(file);
+      });
+      setReminderCustomSound(dataUrl);
+      setCustomSound(dataUrl);
+      setSoundName(file.name);
+      toast.success('صدای یادآور ذخیره شد.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'ذخیرهٔ صدای یادآور ناموفق بود.');
+    } finally {
+      setSoundBusy(false);
+    }
+  };
+
+  const clearCustomSound = () => {
+    setReminderCustomSound(null);
+    setCustomSound(null);
+    setSoundName('صدای انتخاب‌شده');
+  };
+
   return (
     <div className="mx-auto max-w-3xl space-y-5" dir="rtl">
       <div>
@@ -98,6 +138,35 @@ export default function Reminders() {
           </CardContent>
         </Card>
       )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><Volume2 className="h-5 w-5" />صدای اعلان</CardTitle>
+          <CardDescription>یک فایل صوتی کوچک از دستگاه انتخاب کنید. این صدا هنگام باز بودن نسخهٔ وب پخش می‌شود.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="inline-flex h-9 cursor-pointer items-center rounded-md border px-3 text-sm hover:bg-muted">
+              انتخاب فایل صوتی
+              <input type="file" accept="audio/*" className="sr-only" onChange={event => void chooseCustomSound(event)} disabled={soundBusy} />
+            </label>
+            {customSound && (
+              <>
+                <span className="max-w-52 truncate text-xs text-muted-foreground">{soundName}</span>
+                <Button type="button" variant="outline" size="sm" onClick={() => void previewReminderCustomSound().catch(() => toast.error('پخش پیش‌نمایش انجام نشد.'))}>
+                  <Volume2 className="ml-1 h-4 w-4" />پیش‌نمایش
+                </Button>
+                <Button type="button" variant="ghost" size="icon" aria-label="حذف صدای سفارشی" onClick={clearCustomSound}>
+                  <X className="h-4 w-4" />
+                </Button>
+              </>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            صدای اعلان پس‌زمینه و صدای پیش‌فرض سیستم‌عامل جداگانه مدیریت می‌شوند. در Android یا Windows برای تغییر صدای اعلان سیستمی، تنظیمات اعلان دستگاه را باز کنید؛ صدای سفارشی برنامه در فایل پشتیبان هم ذخیره می‌شود.
+          </p>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

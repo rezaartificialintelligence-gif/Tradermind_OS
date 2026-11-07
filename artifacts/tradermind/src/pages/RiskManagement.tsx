@@ -15,6 +15,7 @@ import { Button } from '../components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { toast } from 'sonner';
 import { db } from '../db/database';
+import { getJournalSessionTrades } from '../core/repositories/tradeRepository';
 import type { Trade, RiskGroup } from '../db/database';
 import {
   getRiskConsistency,
@@ -154,7 +155,7 @@ export default function RiskManagement() {
 
   useEffect(() => {
     Promise.all([
-      db.trades.toArray(),
+      getJournalSessionTrades(),
       db.riskProfiles.get('default').catch(() => null),
       db.riskViolations.orderBy('createdAt').reverse().toArray().catch(() => []),
       db.riskGroups.orderBy('createdAt').toArray().catch(() => []),

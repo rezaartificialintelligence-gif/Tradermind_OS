@@ -3,6 +3,7 @@ import { useParams, Link, useLocation } from "wouter";
 import { analysisService } from "../services/analysisService";
 import { strategyService } from "../services/strategyService";
 import { db, AnalysisSession, Strategy, Phase, Step, Rule, Trade } from "../db/database";
+import { getJournalSessionTrades } from "../core/repositories/tradeRepository";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
 import { Label } from "../components/ui/label";
@@ -45,7 +46,7 @@ export default function SessionRunner() {
   const hasInteractedRef = useRef(false);
 
   useEffect(() => { if (id) loadData(); }, [id]);
-  useEffect(() => { db.trades.toArray().then(setAllTrades); }, []);
+  useEffect(() => { getJournalSessionTrades().then(setAllTrades); }, []);
 
   const loadData = async () => {
     const sess = await analysisService.getSessionById(id!);
@@ -255,7 +256,8 @@ export default function SessionRunner() {
     toast.success('تحلیل با موفقیت تکمیل شد!');
 
     if (choice === 'execute') {
-      setLocation('/journal/trades/new?sessionId=' + id);
+      toast.info('برای ثبت معامله، از بخش سشن‌های معاملاتی یک سشن را باز کنید.');
+      setLocation('/journal/sessions');
     } else {
       setViewMode('finished');
       loadData();
@@ -338,8 +340,8 @@ export default function SessionRunner() {
               </div>
               <p className="text-muted-foreground mb-8">تحلیل شما ذخیره شد.</p>
               <div className="flex flex-col sm:flex-row gap-3 justify-center">
-                <Button size="lg" onClick={() => setLocation('/journal/trades/new?sessionId=' + session.id)}>
-                  ثبت معامله
+                <Button size="lg" onClick={() => setLocation('/journal/sessions')}>
+                  رفتن به سشن‌های معاملاتی
                 </Button>
                 <Button size="lg" variant="outline" onClick={() => setLocation('/analysis')}>
                   بازگشت به تحلیل‌ها

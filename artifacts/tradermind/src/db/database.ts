@@ -930,10 +930,7 @@ export interface Account {
   name: string;               // مثلاً «حساب اصلی» یا «دمو بروکر XYZ»
   broker: string;             // نام بروکر (اختیاری)
   currency: string;           // USD, EUR, ...
-  /** شمارهٔ حساب نزد بروکر (اختیاری) */
-  accountNumber?: string | null;
   initialBalance: number | null;
-  /** بالانس فعلی؛ وقتی بالانس اولیه ثبت شده باشد از جمع سود/زیان معاملات بسته‌شده خودکار به‌روز می‌شود. */
   currentBalance: number | null;
   color: string;              // رنگ شناسه‌ای
   isDefault: boolean;

@@ -24,6 +24,7 @@ import { isWin, isLoss, isClosed } from '../lib/tradeHelpers';
 import { getTradingDateParts } from '../lib/tradingTime';
 import { extractFeaturesFromText } from './visualAnalysisService';
 import { computeMetrics } from '../core/metrics/engine';
+import { getJournalSessionTrades } from '../core/repositories/tradeRepository';
 
 // ── Re-export types for use in UI ─────────────────────────────────
 
@@ -591,7 +592,7 @@ function matchRules(session: MarketContextSession, rules: KnowledgeNote[]): Rule
 
 export async function analyzeMarketContext(session: MarketContextSession): Promise<MarketHistoricalAnalysis> {
   const [allTrades, allNotes] = await Promise.all([
-    db.trades.where('status').equals('closed').toArray(),
+    getJournalSessionTrades().then(trades => trades.filter(isClosed)),
     db.knowledgeNotes.toArray().then(r => r.filter(n => n.isActive)),
   ]);
 

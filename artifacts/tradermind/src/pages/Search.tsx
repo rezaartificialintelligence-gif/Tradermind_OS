@@ -8,6 +8,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useLocation } from 'wouter';
 import { consumePendingSearch } from '../lib/pendingSearch';
 import { db } from '../db/database';
+import { getJournalSessionTrades } from '../core/repositories/tradeRepository';
 import { Card, CardContent } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -103,7 +104,7 @@ export default function SearchPage() {
     try {
       // ── معاملات ──
       if (f === 'all' || f === 'trade') {
-        const trades = await db.trades.toArray();
+        const trades = await getJournalSessionTrades();
         for (const t of trades) {
           if (dir && t.direction !== dir) continue;
           if (result && t.result !== result) continue;

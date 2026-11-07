@@ -1,7 +1,6 @@
 {
   "name": "@workspace/tradermind",
   "version": "2.0.0",
-  "packageManager": "pnpm@10.26.1",
   "private": true,
   "type": "module",
   "main": "desktop/main.cjs",
@@ -11,7 +10,7 @@
     "build:web": "vite build --config vite.config.ts",
     "build:android:debug": "node ./scripts/build-android.mjs",
     "build:windows:x64": "node ./scripts/build-windows.mjs",
-    "serve": "pnpm run build && vite preview --config vite.config.ts --host 0.0.0.0",
+    "serve": "vite preview --config vite.config.ts --host 0.0.0.0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --config vitest.config.ts"
   },

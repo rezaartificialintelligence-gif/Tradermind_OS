@@ -97,13 +97,25 @@ export function getPTR(t: Trade): PostTradeReviewData | null {
   }
 }
 
+export const BEHAVIOR_FLAG_LABELS: Record<BehaviorFlag, string> = {
+  hesitation: 'تردید',
+  fear: 'ترس',
+  fomo: 'ترس از دست دادن',
+  impatience: 'بی‌صبری',
+  overconfidence: 'اعتماد بیش‌ازحد',
+  'revenge-trading': 'معاملهٔ انتقامی',
+  uncertainty: 'عدم اطمینان',
+};
+
+export function getBehaviorFlags(t: Trade): BehaviorFlag[] {
+  const flags = getPTR(t)?.behaviorFlags;
+  if (!Array.isArray(flags)) return [];
+  return [...new Set(flags.filter((flag): flag is BehaviorFlag => flag in BEHAVIOR_FLAG_LABELS))];
+}
+
 /** بررسی وجود یک BehaviorFlag در معامله */
 export function hasFlag(t: Trade, flag: BehaviorFlag): boolean {
-  try {
-    return getPTR(t)?.behaviorFlags?.includes(flag) ?? false;
-  } catch {
-    return false;
-  }
+  return getBehaviorFlags(t).includes(flag);
 }
 
 /** شمارش تعداد BehaviorFlag در مجموعه‌ای از معاملات */

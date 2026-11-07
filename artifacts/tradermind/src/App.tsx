@@ -5,11 +5,11 @@ import { App as CapacitorApp } from '@capacitor/app';
 import { Toaster } from '@/components/ui/toaster';
 import { Toaster as SonnerToaster, toast } from 'sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { Route, Switch, Router as WouterRouter } from 'wouter';
+import { Route, Switch, Router as WouterRouter, useLocation } from 'wouter';
 
 // Hash-based location hook برای Electron (file:// protocol)
 // FIX: query params را از path جدا می‌کنیم تا Wouter route matching درست کار کند
-// مثال: hash="#/journal/trades/new?editId=xxx" → path="/journal/trades/new"
+// مثال: hash="#/journal/sessions/id/trades/new?trigger=xxx" → route بدون query
 // query params از طریق window.location.hash مستقیماً در دسترس است
 function useElectronHashLocation(): [string, (to: string) => void] {
   const getPathOnly = () => {
@@ -37,6 +37,40 @@ function getWebRouterBase(): string | undefined {
   const raw = import.meta.env.BASE_URL || '/';
   if (raw.startsWith('.')) return undefined;
   return raw.replace(/\/$/, '');
+}
+
+function LegacyTradeEntryRedirect() {
+  const [, setLocation] = useLocation();
+
+  useEffect(() => {
+    const search = window.location.protocol === 'file:'
+      ? (() => {
+          const hash = window.location.hash.replace(/^#/, '');
+          const queryIndex = hash.indexOf('?');
+          return queryIndex >= 0 ? hash.slice(queryIndex + 1) : '';
+        })()
+      : window.location.search.slice(1);
+    const params = new URLSearchParams(search);
+    const journalSessionId = params.get('journalSessionId');
+
+    if (!journalSessionId) {
+      toast.info('برای ثبت معامله، ابتدا وارد یک سشن معاملاتی شوید.');
+      setLocation('/journal/sessions');
+      return;
+    }
+
+    const editId = params.get('editId');
+    params.delete('journalSessionId');
+    params.delete('editId');
+    params.delete('sessionId');
+    const target = editId
+      ? `/journal/sessions/${encodeURIComponent(journalSessionId)}/trades/${encodeURIComponent(editId)}/edit`
+      : `/journal/sessions/${encodeURIComponent(journalSessionId)}/trades/new`;
+    const remainingQuery = params.toString();
+    setLocation(`${target}${remainingQuery ? `?${remainingQuery}` : ''}`);
+  }, [setLocation]);
+
+  return <div className="p-6 text-center text-muted-foreground">در حال انتقال به سشن معاملاتی…</div>;
 }
 import { ThemeProvider } from './components/ThemeProvider';
 import { Layout } from './components/Layout';
@@ -76,7 +110,6 @@ const StrategyBuilder  = lazyWithRecovery(() => import('./pages/StrategyBuilder'
 const AnalysisList     = lazyWithRecovery(() => import('./pages/AnalysisList'), 'AnalysisList');
 const NewAnalysis      = lazyWithRecovery(() => import('./pages/NewAnalysis'), 'NewAnalysis');
 const SessionRunner    = lazyWithRecovery(() => import('./pages/SessionRunner'), 'SessionRunner');
-const TradeJournal     = lazyWithRecovery(() => import('./pages/TradeJournal'), 'TradeJournal');
 const NewTrade         = lazyWithRecovery(() => import('./pages/NewTrade'), 'NewTrade');
 const TradeDetail      = lazyWithRecovery(() => import('./pages/TradeDetail'), 'TradeDetail');
 const DailyJournalList = lazyWithRecovery(() => import('./pages/DailyJournalList'), 'DailyJournalList');
@@ -247,13 +280,16 @@ function Router() {
           <Route path="/analysis/new" component={NewAnalysis} />
           <Route path="/analysis/:id" component={SessionRunner} />
 
-          <Route path="/journal/trades" component={TradeJournal} />
-          <Route path="/journal/trades/new" component={NewTrade} />
+          {/* مسیر قدیمی فهرست معاملات اکنون همان فهرست سشن‌ها را نشان می‌دهد. */}
+          <Route path="/journal/trades" component={JournalSessions} />
+          <Route path="/journal/trades/new" component={LegacyTradeEntryRedirect} />
           <Route path="/journal/trades/:id/journal" component={JournalTradeReview} />
           <Route path="/journal/trades/:id/review" component={PostTradeReview} />
           <Route path="/journal/trades/:id/live" component={LiveTrade} />
           <Route path="/journal/trades/:id" component={TradeDetail} />
 
+          <Route path="/journal/sessions/:sessionId/trades/new" component={NewTrade} />
+          <Route path="/journal/sessions/:sessionId/trades/:tradeId/edit" component={NewTrade} />
           <Route path="/journal/sessions" component={JournalSessions} />
           <Route path="/journal/sessions/:id" component={JournalSessionDetail} />
           <Route path="/journal/config" component={JournalConfiguration} />

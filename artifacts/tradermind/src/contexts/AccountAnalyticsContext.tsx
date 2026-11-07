@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState } from 
 import type { ReactNode } from 'react';
 import type { Account, Trade } from '../db/database';
 import { accountService } from '../services/accountService';
-import { tradeService } from '../services/tradeService';
+import { getJournalSessionTrades } from '../core/repositories/tradeRepository';
 import { isClosed } from '../lib/tradeHelpers';
 import {
   computeMetrics,
@@ -144,7 +144,7 @@ export function AccountAnalyticsProvider({ children }: { children: ReactNode }) 
     let cancelled = false;
     if (!hasLoadedRef.current) setLoading(true);
     setError(null);
-    Promise.all([accountService.getAll(), tradeService.getAllTrades()])
+    Promise.all([accountService.getAll(), getJournalSessionTrades()])
       .then(([loadedAccounts, loadedTrades]) => {
         if (cancelled) return;
         setAccounts(loadedAccounts);
@@ -237,9 +237,13 @@ function useAccountAnalyticsContext() {
 
 export function useAccountAnalyticsScope(trades: Trade[]) {
   const context = useAccountAnalyticsContext();
+  const journalTrades = useMemo(
+    () => trades.filter(trade => Boolean(trade.journalSessionId)),
+    [trades],
+  );
   const scopedTrades = useMemo(
-    () => scopeTrades(trades, context.selectedAccountId, context.combined),
-    [trades, context.selectedAccountId, context.combined],
+    () => scopeTrades(journalTrades, context.selectedAccountId, context.combined),
+    [journalTrades, context.selectedAccountId, context.combined],
   );
   return { ...context, scopedTrades, allAccountsSelected: context.separateView };
 }

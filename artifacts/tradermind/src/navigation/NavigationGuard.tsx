@@ -31,11 +31,14 @@ function isDashboard(path: string): boolean {
 }
 
 function parentRoute(path: string): string | null {
-  if (path === '/journal/trades/new') return '/journal/trades';
+  if (/^\/journal\/sessions\/[^/?]+(?:\?.*)?$/.test(path)) return '/journal/sessions';
+  const sessionTradeRoute = path.match(/^\/journal\/sessions\/([^/?]+)\/trades\/(?:new|[^/?]+\/edit)(?:\?.*)?$/);
+  if (sessionTradeRoute) return `/journal/sessions/${sessionTradeRoute[1]}`;
+  if (path === '/journal/trades/new') return '/journal/sessions';
   if (/^\/journal\/trades\/[^/]+\/(review|live)$/.test(path)) {
     return path.replace(/\/(review|live)$/, '');
   }
-  if (/^\/journal\/trades\/[^/]+$/.test(path)) return '/journal/trades';
+  if (/^\/journal\/trades\/[^/]+$/.test(path)) return '/journal/sessions';
   if (/^\/journal\/daily\/[^/]+$/.test(path)) return '/journal/daily';
   if (/^\/symbols\/[^/]+$/.test(path)) return '/symbols';
   if (/^\/market-context\/[^/]+$/.test(path)) return '/market-context';

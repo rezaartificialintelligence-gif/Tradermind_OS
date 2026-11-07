@@ -12,6 +12,7 @@ import { Badge } from "../components/ui/badge";
 import { tradeEventService, tradeVersionService } from "../services/tradeEventService";
 import { getMissingFieldsForTrade, scoreOneTrade } from "../services/dataQualityService";
 import { TradeEvent } from "../db/database";
+import { getJournalSessionTrades } from "../core/repositories/tradeRepository";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
   DialogFooter, DialogDescription, DialogTrigger,
@@ -22,7 +23,6 @@ import ScreenshotManager from "../components/ScreenshotManager";
 import { TradeScreenshot } from "../types/screenshot";
 import { getNetPnl } from "../lib/tradeHelpers";
 import { VoiceTypingButton } from "../components/ui/VoiceTypingButton";
-import { SessionAnalysisPanel } from "../components/journal/SessionAnalysisPanel";
 
 // نگاشت ID احساس (انگلیسی) به برچسب فارسی برای نمایش
 const EMOTION_LABELS_FA: Record<string, string> = {
@@ -83,7 +83,7 @@ function getReturnToFromLocation(location: string): string {
   const browserQuery = typeof window !== 'undefined'
     ? window.location.search.replace(/^\?/, '')
     : '';
-  return new URLSearchParams(locationQuery || hashQuery || browserQuery).get('returnTo') || '/journal/trades';
+  return new URLSearchParams(locationQuery || hashQuery || browserQuery).get('returnTo') || '';
 }
 
 export default function TradeDetail() {
@@ -104,11 +104,14 @@ export default function TradeDetail() {
   const [versionsOpen, setVersionsOpen] = useState(false);
   const [versionsLoaded, setVersionsLoaded] = useState(false);
 
-  const returnTo = getReturnToFromLocation(location);
-  const editPath = `/journal/trades/new?editId=${encodeURIComponent(trade?.id || id || '')}&returnTo=${encodeURIComponent(returnTo)}`;
+  const returnTo = getReturnToFromLocation(location) ||
+    (trade?.journalSessionId ? `/journal/sessions/${trade.journalSessionId}` : '/journal/sessions');
+  const editPath = trade?.journalSessionId
+    ? `/journal/sessions/${encodeURIComponent(trade.journalSessionId)}/trades/${encodeURIComponent(trade.id)}/edit?returnTo=${encodeURIComponent(returnTo)}`
+    : null;
 
   useEffect(() => { loadTrade(); }, [id]);
-  useEffect(() => { db.trades.toArray().then(setAllTrades); }, []);
+  useEffect(() => { getJournalSessionTrades().then(setAllTrades); }, []);
   useEffect(() => {
     if (!id) return;
     tradeEventService.getEventsForTrade(id).then(setEvents);
@@ -219,10 +222,12 @@ export default function TradeDetail() {
           {missing.filter(f => f.importance === 'high').map(f => (
             <Badge key={f.key} variant="outline" className="border-amber-500/40 text-amber-500 text-[10px] py-0">{f.label}</Badge>
           ))}
-          <Button size="sm" variant="ghost" className="mr-auto h-6 text-xs"
-            onClick={() => setLocation(editPath)}>
-            تکمیل
-          </Button>
+          {editPath && (
+            <Button size="sm" variant="ghost" className="mr-auto h-6 text-xs"
+              onClick={() => setLocation(editPath)}>
+              تکمیل
+            </Button>
+          )}
         </div>
       )}
 
@@ -258,10 +263,12 @@ export default function TradeDetail() {
               {(() => { try { const ptr = JSON.parse(trade.postTradeReview || '{}'); return ptr.completedAt > 0 ? 'مشاهده ریویو' : 'مرور پس از معامله'; } catch { return 'مرور پس از معامله'; } })()}
             </Button>
           )}
-          <Button variant="outline" size="sm" className="gap-2"
-            onClick={() => setLocation(editPath)}>
-            <Pencil className="w-4 h-4" /> ویرایش
-          </Button>
+          {editPath && (
+            <Button variant="outline" size="sm" className="gap-2"
+              onClick={() => setLocation(editPath)}>
+              <Pencil className="w-4 h-4" /> ویرایش
+            </Button>
+          )}
           <Dialog open={isDeleting} onOpenChange={setIsDeleting}>
             <DialogTrigger asChild>
               <Button variant="destructive" size="icon" className="h-9 w-9">
@@ -601,8 +608,21 @@ export default function TradeDetail() {
             </Card>
           )}
 
-          {/* ── تحلیل‌های چندبازه‌ای ثبت‌شده در سشن معاملاتی ── */}
-          {trade.journalSessionId && <SessionAnalysisPanel tradeId={trade.id} journalSessionId={trade.journalSessionId} />}
+          {trade.journalSessionId && (
+            <Card className="border-primary/20" data-testid="card-linked-journal-session">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">سشن معاملاتی این معامله</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <p className="text-sm leading-6 text-muted-foreground">
+                  تحلیل‌های چندبازه‌ای، تریگرها و پیوست‌های زمینه‌ای در سشن نگهداری می‌شوند تا دوباره‌کاری نشود.
+                </p>
+                <Button variant="outline" className="w-full" onClick={() => setLocation(`/journal/sessions/${trade.journalSessionId}`)} data-testid="button-open-linked-journal-session">
+                  مشاهدهٔ سشن و تحلیل‌ها
+                </Button>
+              </CardContent>
+            </Card>
+          )}
 
           {/* ── تایم‌لاین رویدادها ── */}
           <Card>

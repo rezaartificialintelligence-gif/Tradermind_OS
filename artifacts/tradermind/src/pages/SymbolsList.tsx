@@ -9,6 +9,7 @@ import {
   Star, AlertCircle, ArrowUpDown, GitCompare, Trophy
 } from 'lucide-react';
 import { db } from '../db/database';
+import { getJournalSessionTrades } from '../core/repositories/tradeRepository';
 import { useAccountAnalyticsScope } from '../contexts/AccountAnalyticsContext';
 import { computeAllSymbolProfiles, rankSymbols, compareSymbols, SymbolBehaviorProfile } from '../services/symbolIntelligenceService';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
@@ -234,7 +235,7 @@ type SortKey = 'composite' | 'winrate' | 'avgr' | 'trades';
 export default function SymbolsList() {
   const [loadedTrades, setTrades] = useState<import('../db/database').Trade[]>([]);
   const { scopedTrades: trades } = useAccountAnalyticsScope(loadedTrades);
-  useEffect(() => { db.trades.toArray().then(setTrades); }, []);
+  useEffect(() => { getJournalSessionTrades().then(setTrades); }, []);
   const [sortKey, setSortKey] = useState<SortKey>('composite');
   const [filterClass, setFilterClass] = useState('all');
 
@@ -273,7 +274,7 @@ export default function SymbolsList() {
             <p className="text-muted-foreground">هنوز معامله‌ای ثبت نشده.</p>
             <p className="text-sm text-muted-foreground mt-1">با ثبت معاملات، پروفایل رفتاری هر نماد ساخته می‌شود.</p>
             <Link href="/journal/sessions">
-              <Button className="mt-4">ثبت معامله</Button>
+              <Button className="mt-4">رفتن به سشن‌های معاملاتی</Button>
             </Link>
           </CardContent>
         </Card>

@@ -10,7 +10,7 @@ import type {
   Trade,
   TradingBox,
 } from '../db/database';
-import { getNetPnl, isClosed } from '../lib/tradeHelpers';
+import { BEHAVIOR_FLAG_LABELS, getBehaviorFlags, getNetPnl, isClosed } from '../lib/tradeHelpers';
 import { computeMetrics } from '../core/metrics/engine';
 import {
   getTradingDateParts,
@@ -420,10 +420,15 @@ function getDimensions(trade: Trade, index: ReportsCenterIndex): TradeDimensions
     ...analyses.map(item => item.timeframeOptionId),
     ...triggers.map(item => item.timeframeOptionId),
   ];
-  const psychologyIds = [
-    ...parseStringList(trade.emotions),
-    ...parsePsychologyValues(journalData?.psychology),
-  ];
+  const psychologyValues = new Map<string, string>();
+  const addPsychology = (id: string, label?: string | null) => {
+    if (!id) return;
+    psychologyValues.set(id, label || optionLabel(index, id) || humanize(id));
+  };
+  parseStringList(trade.emotions).forEach(id => addPsychology(id));
+  parsePsychologyValues(journalData?.psychology).forEach(id => addPsychology(id));
+  parseStringList(session?.preTradePsychology).forEach(id => addPsychology(id));
+  getBehaviorFlags(trade).forEach(flag => addPsychology(`behavior:${flag}`, BEHAVIOR_FLAG_LABELS[flag]));
   const mistakeIds = parseStringList(journalData?.mistakeOptionIds);
 
   set('statuses', [[trade.status, trade.status === 'open' ? 'باز' : trade.status === 'closed' ? 'بسته' : 'لغوشده']]);
@@ -433,7 +438,7 @@ function getDimensions(trade: Trade, index: ReportsCenterIndex): TradeDimensions
   set('setups', setups);
   set('sessions', [[sessionValue, sessionLabel]]);
   set('timeframes', timeframeIds.map(id => [id, optionLabel(index, id)]));
-  set('psychology', psychologyIds.map(id => [id, optionLabel(index, id) ?? humanize(id)]));
+  set('psychology', [...psychologyValues.entries()]);
   set('mistakes', mistakeIds.map(id => [id, optionLabel(index, id)]));
   set('tags', parseStringList(trade.tags).map(tag => [tag, tag]));
   set('accounts', [[accountId ?? '__no_account__', accountId ? index.accountsById.get(accountId)?.name ?? `حساب حذف‌شده (${accountId.slice(0, 8)})` : 'بدون حساب']]);
@@ -760,7 +765,7 @@ export function buildReportTable(
     case 'psychology':
       return {
         title: 'روان‌شناسی و احساسات',
-        description: 'احساس‌های ثبت‌شده در معامله و شناسه‌های روان‌شناسی ثبت‌شده در ژورنال؛ چندانتسابی.',
+        description: 'حالت روانی پیش از سشن، رفتارهای مرور پس از معامله و اطلاعات روان‌شناسی ژورنال؛ سوابق قدیمی نیز حفظ می‌شوند.',
         columns: STANDARD_COLUMNS,
         rows: rowsFor(byKey('psychology')),
         multiAttributed: true,

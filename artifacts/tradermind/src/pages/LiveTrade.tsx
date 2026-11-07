@@ -3,6 +3,7 @@ import { useParams, useLocation } from 'wouter';
 import { format } from 'date-fns';
 import { tradeService } from '../services/tradeService';
 import { db, Trade } from '../db/database';
+import { getJournalSessionTrades } from '../core/repositories/tradeRepository';
 import {
   parseLiveMonitoring, saveLiveMonitoring, computeCurrentR, detectStateFromR,
   initializePlanSnapshot, addEvent, transitionState, addRProgression,
@@ -129,7 +130,7 @@ export default function LiveTrade() {
     if (!tr) { setLocation('/journal/trades'); return; }
     setTrade(tr);
 
-    const allTrs = await db.trades.toArray();
+    const allTrs = await getJournalSessionTrades();
     setAllTrades(allTrs);
 
     let m = parseLiveMonitoring(tr);

@@ -4,7 +4,7 @@ import { Skeleton } from "../components/ui/skeleton";
 import { Trade, DailyJournal, Strategy, AnalysisSession, Phase, Step } from "../db/database";
 import { strategyService } from "../services/strategyService";
 import { analysisService } from "../services/analysisService";
-import { tradeService } from "../services/tradeService";
+import { getJournalSessionTrades } from "../core/repositories/tradeRepository";
 import { journalService } from "../services/journalService";
 import { backupService } from "../services/backupService";
 import { accountService } from "../services/accountService";
@@ -128,7 +128,7 @@ interface DashboardData {
 
 async function loadDashboardData(): Promise<DashboardData> {
   const [trades, sessions, journals, strategies, todayJournal] = await Promise.all([
-    tradeService.getAllTrades(),
+    getJournalSessionTrades(),
     analysisService.getAllSessions(),
     journalService.getAllJournals(),
     strategyService.getAllStrategies(),
@@ -449,25 +449,25 @@ export default function Dashboard() {
         <div>
           <h1 className="text-2xl font-bold mb-2">به TraderMind خوش آمدی</h1>
           <p className="text-muted-foreground max-w-sm">
-            اولین استراتژی‌ات را ایجاد کن تا مسیر تحلیل و ژورنال‌نویسی حرفه‌ای را شروع کنیم.
+            روز معاملاتی‌ات را با یک سشن شروع کن؛ تحلیل تایم‌فریم‌ها و ورودهای متعدد همان‌جا کنار هم ثبت می‌شوند.
           </p>
         </div>
         <div className="flex flex-col sm:flex-row gap-3">
-          <Link href="/strategies/new">
+          <Link href="/journal/sessions">
             <Button size="lg" className="gap-2">
-              <Plus className="w-5 h-5" /> ایجاد اولین استراتژی
+              <ActivitySquare className="w-5 h-5" /> شروع روز معاملاتی
             </Button>
           </Link>
-          <Link href="/journal/sessions">
+          <Link href="/strategies/new">
             <Button size="lg" variant="outline" className="gap-2">
-              <PenLine className="w-5 h-5" /> ثبت اولین معامله
+              <Plus className="w-5 h-5" /> ایجاد اولین استراتژی
             </Button>
           </Link>
         </div>
         <div className="grid grid-cols-3 gap-4 mt-4 text-sm text-muted-foreground max-w-sm w-full">
           {[
             { icon: Target, text: "استراتژی بساز" },
-            { icon: ActivitySquare, text: "تحلیل کن" },
+            { icon: ActivitySquare, text: "روز معاملاتی را ثبت کن" },
             { icon: BarChart3, text: "رشد کن" },
           ].map(({ icon: Icon, text }) => (
             <div key={text} className="flex flex-col items-center gap-2 p-3 rounded-xl border border-dashed">
@@ -499,13 +499,6 @@ export default function Dashboard() {
               <ActivitySquare className="w-4 h-4" />
               <span className="hidden sm:inline">شروع سشن معاملاتی</span>
               <span className="sm:hidden">سشن جدید</span>
-            </Button>
-          </Link>
-          <Link href="/journal/sessions">
-            <Button variant="secondary" className="gap-2">
-              <Plus className="w-4 h-4" />
-              <span className="hidden sm:inline">ثبت معامله</span>
-              <span className="sm:hidden">معامله</span>
             </Button>
           </Link>
         </div>
@@ -893,14 +886,14 @@ export default function Dashboard() {
               <CardTitle className="text-base flex items-center gap-2">
                 <TrendingUp className="w-4 h-4 text-primary" /> آخرین معاملات
               </CardTitle>
-              <Link href="/journal/trades" className="text-sm text-primary flex items-center gap-0.5 hover:underline">
+              <Link href="/journal/sessions" className="text-sm text-primary flex items-center gap-0.5 hover:underline">
                 همه <ChevronLeft className="w-4 h-4" />
               </Link>
             </div>
           </CardHeader>
           <CardContent className="flex-1">
             {recentTrades.length === 0 ? (
-              <EmptyState icon={TrendingDown} text="هنوز معامله‌ای ثبت نشده است." cta="ثبت اولین معامله" href="/journal/sessions" />
+              <EmptyState icon={TrendingDown} text="هنوز معامله‌ای ثبت نشده است." cta="شروع سشن معاملاتی" href="/journal/sessions" />
             ) : (
               <div className="space-y-2">
                 {recentTrades.map(trade => (
@@ -1324,10 +1317,10 @@ export default function Dashboard() {
         <CardContent>
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2">
             {[
-              { icon: ActivitySquare, label: "تحلیل جدید",     href: "/analysis/new" },
-              { icon: Plus,           label: "ثبت معامله",     href: "/journal/sessions" },
+              { icon: ActivitySquare, label: "شروع روز معاملاتی", href: "/journal/sessions" },
+              { icon: Plus,           label: "ثبت معامله در سشن", href: "/journal/sessions" },
               { icon: PenLine,        label: "ژورنال امروز",   href: "/journal/daily/new" },
-              { icon: TrendingUp,     label: "معاملات",        href: "/journal/trades" },
+              { icon: TrendingUp,     label: "سشن‌های معاملاتی", href: "/journal/sessions" },
               { icon: BarChart3,      label: "گزارش‌ها",       href: "/reports" },
               { icon: FileArchive,    label: "پشتیبان‌گیری",  href: null, onClick: handleQuickBackup, busy: exportingBackup },
             ].map(({ icon: Icon, label, href, onClick, busy }) => (

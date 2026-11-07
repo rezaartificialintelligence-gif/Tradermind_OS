@@ -5,6 +5,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useLocation } from 'wouter';
 import { tradeService } from '../services/tradeService';
+import { getJournalSessionTrades } from '../core/repositories/tradeRepository';
 import { analysisService } from '../services/analysisService';
 import { postTradeReviewService } from '../services/postTradeReviewService';
 import { Trade, AnalysisSession, PostTradeReviewData, defaultPostTradeReview, BehaviorFlag } from '../db/database';
@@ -213,7 +214,7 @@ export default function PostTradeReview() {
   const [showLiveMonitoringCard, setShowLiveMonitoringCard] = useState(false);
 
   useEffect(() => { load(); }, [id]);
-  useEffect(() => { db.trades.toArray().then(setAllTrades); }, []);
+  useEffect(() => { getJournalSessionTrades().then(setAllTrades); }, []);
 
   const load = async () => {
     if (!id) return;
@@ -254,7 +255,7 @@ export default function PostTradeReview() {
       };
       if (generateAI) {
         setIsGenerating(true);
-        const allTrades = await tradeService.getAllTrades();
+        const allTrades = await getJournalSessionTrades();
         const { generateAIAnalysis } = await import('../services/postTradeReviewService');
         const ai = generateAIAnalysis(trade, toSave, allTrades);
         toSave.aiAnalysis = ai;

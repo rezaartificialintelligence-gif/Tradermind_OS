@@ -1,25 +1,35 @@
 import { runAsRemote } from '../db/syncSupport';
 import { DEFAULT_ACCOUNT_ID } from '../db/defaultIds';
-import { db, Account, Trade } from '../db/database';
-import { isClosed, getNetPnl } from '../lib/tradeHelpers';
+import { db, Account } from '../db/database';
+import { calculateAccountBalance } from './accountBalanceService';
 
-/** بالانس = بالانس اولیه + جمع سود/زیان خالص معاملات بسته‌شدهٔ همان حساب. */
-export function computeAccountBalance(account: Pick<Account, 'initialBalance'>, trades: Trade[]): number | null {
-  if (account.initialBalance == null) return null;
-  const pnl = trades.filter(isClosed).reduce((sum, trade) => sum + (getNetPnl(trade) ?? 0), 0);
-  return Number((account.initialBalance + pnl).toFixed(2));
-}
+async function loadAccountsWithCalculatedBalances(): Promise<Account[]> {
+  const [storedAccounts, trades] = await Promise.all([
+    db.accounts.orderBy('createdAt').toArray(),
+    db.trades.toArray(),
+  ]);
 
-/** درصد ریسک از مبلغ ریسک و بالانس حساب. */
-export function riskPercentFromAmount(riskAmount: number | null, balance: number | null): number | null {
-  if (riskAmount == null || balance == null || balance <= 0 || riskAmount < 0) return null;
-  return Number(((riskAmount / balance) * 100).toFixed(2));
-}
+  const accounts = storedAccounts.map(account => ({
+    ...account,
+    currentBalance: calculateAccountBalance(account, trades),
+  }));
+  const now = Date.now();
+  await Promise.all(accounts.flatMap(account => {
+    const stored = storedAccounts.find(item => item.id === account.id);
+    if (
+      account.initialBalance == null ||
+      account.currentBalance == null ||
+      stored?.currentBalance === account.currentBalance
+    ) {
+      return [];
+    }
+    return [db.accounts.update(account.id, {
+      currentBalance: account.currentBalance,
+      updatedAt: now,
+    })];
+  }));
 
-/** مبلغ ریسک از درصد ریسک و بالانس حساب. */
-export function riskAmountFromPercent(riskPercentage: number | null, balance: number | null): number | null {
-  if (riskPercentage == null || balance == null || balance <= 0 || riskPercentage < 0) return null;
-  return Number(((riskPercentage / 100) * balance).toFixed(2));
+  return accounts;
 }
 
 function uuid(): string {
@@ -27,36 +37,16 @@ function uuid(): string {
 }
 
 export const accountService = {
-  /** بالانس لحظه‌ای حساب از روی معاملات (null اگر بالانس اولیه ثبت نشده باشد). */
-  async getLiveBalance(accountId: string): Promise<number | null> {
-    const account = await db.accounts.get(accountId);
-    if (!account) return null;
-    const trades = await db.trades.where('accountId').equals(accountId).toArray();
-    return computeAccountBalance(account, trades);
-  },
-
-  /** بالانس ذخیره‌شدهٔ حساب را با معاملات هماهنگ می‌کند (اگر بالانس اولیه ثبت شده باشد). */
-  async recalculateBalance(accountId: string | null | undefined): Promise<void> {
-    if (!accountId) return;
-    const account = await db.accounts.get(accountId);
-    if (!account || account.initialBalance == null) return;
-    const trades = await db.trades.where('accountId').equals(accountId).toArray();
-    const balance = computeAccountBalance(account, trades);
-    if (balance !== null && balance !== account.currentBalance) {
-      await db.accounts.update(accountId, { currentBalance: balance, updatedAt: Date.now() });
-    }
-  },
-
   async getAll(): Promise<Account[]> {
-    return db.accounts.orderBy('createdAt').toArray();
+    return loadAccountsWithCalculatedBalances();
   },
 
   async getActive(): Promise<Account[]> {
-    return db.accounts.filter(account => !account.isArchived).sortBy('createdAt');
+    return (await loadAccountsWithCalculatedBalances()).filter(account => !account.isArchived);
   },
 
   async getById(id: string): Promise<Account | undefined> {
-    return db.accounts.get(id);
+    return (await loadAccountsWithCalculatedBalances()).find(account => account.id === id);
   },
 
   async create(data: Omit<Account, 'id' | 'createdAt' | 'updatedAt'>): Promise<Account> {

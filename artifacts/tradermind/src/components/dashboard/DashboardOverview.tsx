@@ -136,7 +136,7 @@ export function DashboardOverview({ trades, startBalance, strategyName, range, o
               minHeight={260}
               title="برای نمودار سرمایه حداقل ۲ معامله‌ی بسته لازم است"
               hint="پس از ثبت و بستن معاملات، منحنی سرمایه اینجا از داده‌های واقعی شما ساخته می‌شود."
-              action={<Link href="/journal/sessions" className="text-xs font-medium text-primary hover:underline">ثبت معامله</Link>}
+              action={<Link href="/journal/sessions" className="text-xs font-medium text-primary hover:underline">رفتن به سشن‌ها</Link>}
             />
           )}
         </Panel>

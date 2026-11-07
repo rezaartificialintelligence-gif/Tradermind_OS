@@ -10,6 +10,7 @@
  */
 
 import { db, Trade, PostTradeReviewData, PostTradeAIAnalysis, DetectedPattern, LearningAuditEntry, AuditEntryType, defaultPostTradeReview } from '../db/database';
+import { getJournalSessionTrades } from '../core/repositories/tradeRepository';
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -358,8 +359,10 @@ export async function savePostTradeReview(
   tradeId: string,
   reviewData: PostTradeReviewData,
 ): Promise<void> {
-  const allTrades = await db.trades.toArray();
-  const trade = allTrades.find(t => t.id === tradeId);
+  const [trade, allTrades] = await Promise.all([
+    db.trades.get(tradeId),
+    getJournalSessionTrades(),
+  ]);
   if (!trade) throw new Error('Trade not found');
 
   // تولید تحلیل AI
@@ -418,7 +421,7 @@ export interface LearningStats {
 }
 
 export async function getLearningStats(): Promise<LearningStats> {
-  const allTrades = await db.trades.toArray();
+  const allTrades = await getJournalSessionTrades();
   const closed = allTrades.filter(isClosed);
   const reviewed = allTrades.filter(t => {
     try { const r = JSON.parse(t.postTradeReview || '{}'); return r.completedAt > 0; } catch { return false; }

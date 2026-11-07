@@ -14,7 +14,15 @@ import {
   getByDay, getByHour, getBySession, getOvertradingAnalysis,
   BehaviorPattern, calcBaseMetrics,
 } from './performanceService';
-import { toDateStr, isClosed, getPTR, flagCount } from '../lib/tradeHelpers';
+import {
+  BEHAVIOR_FLAG_LABELS,
+  getBehaviorFlags,
+  getEmotions,
+  toDateStr,
+  isClosed,
+  getPTR,
+  flagCount,
+} from '../lib/tradeHelpers';
 import { getTradingMonthKey } from '../lib/tradingTime';
 import { getR, mean, stdDev, winRateOf } from '../core/metrics/engine';
 
@@ -230,9 +238,11 @@ export function analyzeRecurringMistakeTrends(allTrades: Trade[]): MistakeTrend[
     const em = new Map<string, number>();
     trades.forEach(t => {
       if (!checkPatternMatch(pattern.id, t)) return;
-      try {
-        (JSON.parse(t.emotions) as string[]).forEach(e => em.set(e, (em.get(e) ?? 0) + 1));
-      } catch { /* ignore */ }
+      const states = new Set([
+        ...getEmotions(t),
+        ...getBehaviorFlags(t).map(flag => BEHAVIOR_FLAG_LABELS[flag]),
+      ]);
+      states.forEach(state => em.set(state, (em.get(state) ?? 0) + 1));
     });
     return [...em.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([emotion, count]) => ({ emotion, count }));
   }
@@ -350,17 +360,18 @@ export function computeDisciplineScore(allTrades: Trade[]): DisciplineScoreResul
   const fearCount    = flagCount(closed, 'fear');
   const impatience   = flagCount(closed, 'impatience');
   const overconf     = flagCount(closed, 'overconfidence');
+  const hesitation   = flagCount(closed, 'hesitation');
+  const uncertainty  = flagCount(closed, 'uncertainty');
 
-  const negativeEmotionTrades = closed.filter(t => {
-    try {
-      const e = JSON.parse(t.emotions) as string[];
-      return e.some(x => ['FOMO', 'Fearful', 'Anxious', 'Frustrated', 'Revenge Trading', 'Overconfident'].includes(x));
-    } catch { return false; }
-  });
+  const negativeEmotionTrades = closed.filter(t =>
+    getBehaviorFlags(t).length > 0 || getEmotions(t).some(emotion =>
+      ['FOMO', 'Fearful', 'Anxious', 'Frustrated', 'Revenge Trading', 'Overconfident'].includes(emotion),
+    ),
+  );
   const negEmRate      = n > 0 ? negativeEmotionTrades.length / n : 0;
   const revRate        = n > 0 ? revengeCount / n : 0;
   const fomoRate       = n > 0 ? fomoCount / n : 0;
-  const totalBadFlags  = (revengeCount + fomoCount + fearCount + impatience + overconf) / (n || 1);
+  const totalBadFlags  = (revengeCount + fomoCount + fearCount + impatience + overconf + hesitation + uncertainty) / (n || 1);
 
   let emotionScore = 100;
   emotionScore -= Math.round(revRate * 50);

@@ -5,12 +5,15 @@ import {
   useCallback,
   type ComponentProps,
 } from "react";
-import { getRoutePath, getRouteQuery, buildRouteUrl } from "../lib/routeQuery";
-import { Link, useLocation } from "wouter";
+import { Link, useLocation, useParams } from "wouter";
 import { tradeService } from "../services/tradeService";
 import { analysisService } from "../services/analysisService";
 import { strategyService } from "../services/strategyService";
 import { accountService } from "../services/accountService";
+import {
+  calculateAccountBalance,
+  calculateRiskPercentage,
+} from "../services/accountBalanceService";
 import {
   isTradingBoxAvailableForAccount,
   tradingBoxService,
@@ -69,6 +72,7 @@ import {
 } from "../navigation/NavigationGuard";
 import { useAppStore } from "../store/useAppStore";
 import { getNetPnl } from "../lib/tradeHelpers";
+import { normalizeDecimalInput } from "../lib/numberInput";
 import {
   journalSessionService,
   parseJournalArray,
@@ -206,18 +210,6 @@ const POSITION_SIZE_OPTIONS = [
 const RISK_PERCENTAGE_OPTIONS = [
   0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0, 5.0, 7.5, 10.0,
 ];
-
-function normalizeDecimalInput(value: string): string {
-  const normalized = value
-    .replace(/[۰-۹]/g, (digit) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(digit)))
-    .replace(/[٠-٩]/g, (digit) => String("٠١٢٣٤٥٦٧٨٩".indexOf(digit)))
-    .replace(/[٫,]/g, ".")
-    .replace(/[^\d.-]/g, "");
-  const sign = normalized.startsWith("-") ? "-" : "";
-  const unsigned = normalized.replace(/-/g, "");
-  const [whole = "", ...fraction] = unsigned.split(".");
-  return `${sign}${whole}${fraction.length > 0 ? `.${fraction.join("")}` : ""}`;
-}
 
 function customDecimalValue(value: string): number | null {
   if (!value || value === ".") return null;
@@ -418,19 +410,35 @@ function tradeMarket(symbol: string): string {
 }
 
 /** فقط وقتی واقعاً روی صفحهٔ فرم معامله هستیم true می‌دهد (نه هنگام خروج از صفحه). */
-function isOnTradeFormRoute(): boolean {
-  return getRoutePath().replace(/\/+$/, "").endsWith("/journal/trades/new");
+function isOnSessionTradeFormRoute(): boolean {
+  const path =
+    window.location.protocol === "file:"
+      ? window.location.hash.replace(/^#/, "").split("?")[0]
+      : window.location.pathname;
+  return /^\/journal\/sessions\/[^/]+\/trades\/(?:new|[^/]+\/edit)$/.test(
+    path.replace(/\/+$/, ""),
+  );
 }
 
 export default function NewTrade() {
   const [, setLocation] = useLocation();
-  // در حالت هش (ویندوز و اندروید) query داخل hash است؛ از کمک‌تابع مشترک می‌خوانیم.
-  const _searchStr = getRouteQuery();
+  const routeParams = useParams<{ sessionId?: string; tradeId?: string }>();
+  // FIX: در hash routing الکترون، query params باید مستقیماً از hash خوانده شوند
+  // چون useElectronHashLocation اکنون فقط path را برمی‌گرداند (بدون query string)
+  // تا Wouter بتواند route matching درستی انجام دهد
+  const _searchStr =
+    window.location.protocol === "file:"
+      ? (() => {
+          const hash = window.location.hash.replace(/^#/, "");
+          const qIdx = hash.indexOf("?");
+          return qIdx >= 0 ? hash.slice(qIdx + 1) : "";
+        })()
+      : window.location.search;
   const searchParams = new URLSearchParams(_searchStr);
   const sessionId = searchParams.get("sessionId");
-  const journalSessionId = searchParams.get("journalSessionId");
+  const journalSessionId = routeParams.sessionId ?? null;
   const journalTriggerId = searchParams.get("journalTriggerId");
-  const editId = searchParams.get("editId");
+  const editId = routeParams.tradeId ?? searchParams.get("editId");
   const returnTo = searchParams.get("returnTo");
   // idFromUrl فقط برای بازیابی پیش‌نویس پس از رفرش صفحه استفاده می‌شود
   // اگر new=true باشد یا editId وجود داشته باشد، از آن صرف‌نظر می‌شود
@@ -458,6 +466,7 @@ export default function NewTrade() {
   // ورودی متن جداست تا مقدارهای میانی مثل «۰.» هنگام تایپ با رندر مجدد پاک نشوند.
   const [positionSizeInput, setPositionSizeInput] = useState("");
   const [riskPercentageInput, setRiskPercentageInput] = useState("");
+  const autoDerivedRiskPercentageRef = useRef<number | null>(null);
   const [newMtfTimeframe, setNewMtfTimeframe] = useState("");
   const [newScenarioDirection, setNewScenarioDirection] =
     useState<MTFScenario["direction"]>("both");
@@ -552,7 +561,7 @@ export default function NewTrade() {
 
     // اصلاح باگ «معامله تکراری»: هنگام «ذخیره/انصراف» آدرس صفحه عوض می‌شود و یک رندر آخر
     // بدون editId اجرا می‌شود؛ قبلاً همین رندر یک معامله خالی جدید می‌ساخت.
-    if (!isOnTradeFormRoute()) return;
+    if (!isOnSessionTradeFormRoute()) return;
     // اگر قبلاً برای یک معامله مشخص باز شده‌ایم، بدون شناسه هیچ‌وقت معامله جدید نساز.
     if (initialized.current && tradeIdRef.current && !editId && !idFromUrl)
       return;
@@ -583,6 +592,11 @@ export default function NewTrade() {
       if (requestedTradeId) {
         const existing = await tradeService.getTradeById(requestedTradeId);
         if (existing) {
+          if (existing.journalSessionId !== journalSessionId) {
+            toast.error("فقط معاملات همین سشن از این مسیر قابل ویرایش هستند.");
+            setLocation(journalSessionId ? `/journal/sessions/${journalSessionId}` : "/journal/sessions");
+            return;
+          }
           currentTrade = existing;
           isNewDraftRef.current =
             !editId && sessionStorage.getItem(draftMarkerKey) === existing.id;
@@ -595,20 +609,20 @@ export default function NewTrade() {
         // IndexedDB read raced with navigation.
         if (requestedTradeId) {
           toast.error("معاملهٔ موردنظر پیدا نشد و معاملهٔ جدیدی ساخته نشد.");
-          setLocation("/journal/trades");
+          setLocation("/journal/sessions");
           return;
         }
 
         if (cancelBeforeCreateRef.current) return;
-        // ثبت معامله فقط از داخل «سشن معاملاتی» انجام می‌شود (تریگر → ثبت معامله).
-        if (!journalSessionId && !sessionId) {
+        // ثبت معامله فقط از مسیر یک سشن معاملاتی مجاز است.
+        if (!journalSessionId) {
           toast.info("ثبت معامله از این پس از داخل سشن معاملاتی انجام می‌شود.");
           setLocation("/journal/sessions");
           return;
         }
         currentTrade = await tradeService.createTrade({
           sessionId: sessionId || null,
-          journalSessionId: journalSessionId || null,
+          journalSessionId,
         });
         if (cancelBeforeCreateRef.current) {
           await tradeService.deleteTrade(currentTrade.id);
@@ -626,7 +640,11 @@ export default function NewTrade() {
           (journalSessionId ? `&journalSessionId=${journalSessionId}` : "") +
           (journalTriggerId ? `&journalTriggerId=${journalTriggerId}` : "") +
           (returnTo ? `&returnTo=${encodeURIComponent(returnTo)}` : "");
-        window.history.replaceState(null, "", buildRouteUrl(newSearch));
+        window.history.replaceState(
+          null,
+          "",
+          window.location.pathname + newSearch,
+        );
         // Keep our init key in sync so Wouter re-renders don't re-trigger init
         lastInitKey.current = `|${currentTrade.id}|${sessionId ?? ""}|${journalSessionId ?? ""}|${journalTriggerId ?? ""}`;
       }
@@ -727,6 +745,54 @@ export default function NewTrade() {
     });
   }, []);
 
+  const selectedTradeAccount = accounts.find(
+    (account) => account.id === trade?.accountId,
+  ) ?? null;
+  const tradesWithCurrentDraft = trade
+    ? allTrades.some((item) => item.id === trade.id)
+      ? allTrades.map((item) => item.id === trade.id ? trade : item)
+      : [...allTrades, trade]
+    : allTrades;
+  const accountBalanceNow = selectedTradeAccount
+    ? calculateAccountBalance(selectedTradeAccount, tradesWithCurrentDraft)
+    : null;
+  const accountBalanceAtEntry =
+    selectedTradeAccount && trade
+      ? calculateAccountBalance(
+          selectedTradeAccount,
+          allTrades,
+          trade.openedAt,
+          trade.id,
+        )
+      : null;
+  const calculatedRiskPercentage =
+    selectedTradeAccount?.currency?.toUpperCase() === "USD"
+      ? calculateRiskPercentage(trade?.riskAmount, accountBalanceAtEntry)
+      : null;
+
+  useEffect(() => {
+    if (!trade) return;
+    if (calculatedRiskPercentage != null) {
+      autoDerivedRiskPercentageRef.current = calculatedRiskPercentage;
+      setRiskPercentageInput("");
+      if (trade.riskPercentage !== calculatedRiskPercentage) {
+        setTrade((current) => current
+          ? { ...current, riskPercentage: calculatedRiskPercentage }
+          : current);
+      }
+      return;
+    }
+
+    const previousAutomaticValue = autoDerivedRiskPercentageRef.current;
+    autoDerivedRiskPercentageRef.current = null;
+    if (
+      previousAutomaticValue != null &&
+      trade.riskPercentage === previousAutomaticValue
+    ) {
+      setTrade((current) => current ? { ...current, riskPercentage: null } : current);
+    }
+  }, [calculatedRiskPercentage, trade?.riskPercentage]);
+
   const mtfAnalysis = (() => {
     try {
       const parsed = JSON.parse((trade as any)?.mtfAnalysis || "null");
@@ -816,9 +882,28 @@ export default function NewTrade() {
       const operation = (async () => {
         setIsSaving(true);
         try {
+          const saveAccount = accounts.find(
+            (account) => account.id === dataToSave.accountId,
+          );
+          const equityAtEntry = saveAccount
+            ? calculateAccountBalance(
+                saveAccount,
+                allTrades,
+                dataToSave.openedAt,
+                dataToSave.id,
+              )
+            : null;
+          const automaticRiskPercentage =
+            saveAccount?.currency?.toUpperCase() === "USD"
+              ? calculateRiskPercentage(dataToSave.riskAmount, equityAtEntry)
+              : null;
+          const dataWithCalculatedRisk =
+            automaticRiskPercentage != null
+              ? { ...dataToSave, riskPercentage: automaticRiskPercentage }
+              : dataToSave;
           const saved = await tradeService.updateTrade(
-            dataToSave.id,
-            dataToSave,
+            dataWithCalculatedRisk.id,
+            dataWithCalculatedRisk,
           );
           if (!saved) {
             toast.error(
@@ -827,6 +912,16 @@ export default function NewTrade() {
             return false;
           }
           lastSavedRef.current = saved;
+          setAllTrades((current) => {
+            const index = current.findIndex((item) => item.id === saved.id);
+            if (index < 0) return [...current, saved];
+            return current.map((item) => item.id === saved.id ? saved : item);
+          });
+          try {
+            setAccounts(await accountService.getAll());
+          } catch (balanceRefreshError) {
+            console.error("[AccountBalance] refresh after trade save failed", balanceRefreshError);
+          }
           if (source !== "autosave" && isNewDraftRef.current) {
             isNewDraftRef.current = false;
             sessionStorage.removeItem(draftMarkerKey);
@@ -854,7 +949,7 @@ export default function NewTrade() {
         if (savePromiseRef.current === operation) savePromiseRef.current = null;
       }
     },
-    [],
+    [accounts, allTrades],
   );
 
   const discardNewDraft = useCallback(async () => {
@@ -934,7 +1029,7 @@ export default function NewTrade() {
   const backUrl =
     returnTo ||
     (journalSessionId ? `/journal/sessions/${journalSessionId}` : null) ||
-    (editId ? `/journal/trades/${editId}` : "/journal/trades");
+    (editId ? `/journal/trades/${editId}` : "/journal/sessions");
 
   const handleCancel = async () => {
     if (!tradeReadyRef.current) cancelBeforeCreateRef.current = true;
@@ -1032,7 +1127,7 @@ export default function NewTrade() {
           </Button>
           <div className="min-w-0">
             <h1 className="truncate text-2xl font-bold tracking-tight">
-              {editId ? "Edit Trade" : "Log Trade"}
+              {editId ? "ویرایش معامله سشن" : "ثبت معامله در سشن"}
             </h1>
             {trade.journalSessionId && (
               <p
@@ -1746,41 +1841,64 @@ export default function NewTrade() {
               {/* درصد ریسک — لیست */}
               <div className="space-y-2">
                 <Label>ریسک (٪)</Label>
-                <Select
-                  value={
-                    trade.riskPercentage != null
-                      ? String(trade.riskPercentage)
-                      : ""
-                  }
-                  onValueChange={(v) => {
-                    setRiskPercentageInput("");
-                    handleChange("riskPercentage", v ? parseFloat(v) : null);
-                  }}
-                >
-                  <SelectTrigger className="h-9 text-sm">
-                    <SelectValue placeholder="انتخاب ریسک…" />
-                  </SelectTrigger>
-                  <SelectContent className="max-h-60">
-                    {RISK_PERCENTAGE_OPTIONS.map((v) => (
-                      <SelectItem key={v} value={String(v)}>
-                        {v}٪
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Input
-                  type="text"
-                  inputMode="decimal"
-                  placeholder="یا مقدار دلخواه…"
-                  value={riskPercentageInput}
-                  onChange={(e) => {
-                    const value = normalizeDecimalInput(e.target.value);
-                    setRiskPercentageInput(value);
-                    handleChange("riskPercentage", customDecimalValue(value));
-                  }}
-                  className="h-8 text-sm mt-1"
-                  dir="ltr"
-                />
+                {calculatedRiskPercentage != null ? (
+                  <>
+                    <div className="flex h-9 items-center rounded-md border bg-muted/30 px-3 text-sm font-semibold" dir="ltr">
+                      {calculatedRiskPercentage.toLocaleString(undefined, {
+                        maximumFractionDigits: 4,
+                      })}%
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      خودکار از مبلغ ریسک و موجودی حساب در زمان ورود محاسبه شد.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <Select
+                      value={
+                        trade.riskPercentage != null
+                          ? String(trade.riskPercentage)
+                          : ""
+                      }
+                      onValueChange={(v) => {
+                        setRiskPercentageInput("");
+                        handleChange("riskPercentage", v ? parseFloat(v) : null);
+                      }}
+                    >
+                      <SelectTrigger className="h-9 text-sm">
+                        <SelectValue placeholder="انتخاب ریسک…" />
+                      </SelectTrigger>
+                      <SelectContent className="max-h-60">
+                        {RISK_PERCENTAGE_OPTIONS.map((v) => (
+                          <SelectItem key={v} value={String(v)}>
+                            {v}٪
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Input
+                      type="text"
+                      inputMode="decimal"
+                      placeholder="یا مقدار دلخواه…"
+                      value={riskPercentageInput}
+                      onChange={(e) => {
+                        const value = normalizeDecimalInput(e.target.value);
+                        setRiskPercentageInput(value);
+                        handleChange("riskPercentage", customDecimalValue(value));
+                      }}
+                      className="h-8 text-sm mt-1"
+                      dir="ltr"
+                    />
+                    {selectedTradeAccount &&
+                      selectedTradeAccount.currency?.toUpperCase() !== "USD" &&
+                      trade.riskAmount != null &&
+                      trade.riskAmount > 0 && (
+                        <p className="text-xs text-amber-600">
+                          برای محاسبهٔ خودکار، ارز مبلغ ریسک و حساب باید هر دو دلار آمریکا باشند.
+                        </p>
+                      )}
+                  </>
+                )}
               </div>
 
               <div className="space-y-2">
@@ -1789,6 +1907,21 @@ export default function NewTrade() {
                   value={trade.riskAmount}
                   onValueChange={(value) => handleChange("riskAmount", value)}
                 />
+                {selectedTradeAccount && (
+                  <p className="text-xs text-muted-foreground">
+                    موجودی فعلی:{" "}
+                    {accountBalanceNow == null
+                      ? "ثبت نشده"
+                      : `${accountBalanceNow.toLocaleString()} ${selectedTradeAccount.currency}`}
+                    {accountBalanceAtEntry != null &&
+                      ` — مبنای درصد ریسک: ${accountBalanceAtEntry.toLocaleString()} ${selectedTradeAccount.currency}`}
+                  </p>
+                )}
+                {!selectedTradeAccount && (
+                  <p className="text-xs text-muted-foreground">
+                    برای محاسبهٔ خودکار درصد، ابتدا یک حساب معاملاتی انتخاب کنید.
+                  </p>
+                )}
               </div>
             </div>
           </section>

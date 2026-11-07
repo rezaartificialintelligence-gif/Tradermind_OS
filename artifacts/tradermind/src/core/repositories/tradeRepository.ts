@@ -179,7 +179,31 @@ export async function getTradeById(id: string): Promise<Trade | undefined> {
   return db.trades.get(id);
 }
 
-/** تمام معاملات برای analytics — با orderBy برای حذف sort بعدی */
-export async function getAllTradesForAnalytics(): Promise<Trade[]> {
+/**
+ * معاملات متعلق به سشن‌های ژورنال معاملاتی.
+ * رکوردهای ثبت‌شده با روش قدیمی در بانک اطلاعاتی باقی می‌مانند، اما وارد
+ * گزارش‌ها و محاسباتی که از این تابع استفاده می‌کنند نمی‌شوند.
+ */
+export async function getJournalSessionTrades(): Promise<Trade[]> {
+  const sessionIds = await db.journalSessions.toCollection().primaryKeys();
+  if (sessionIds.length === 0) return [];
+
+  return db.trades
+    .where('journalSessionId')
+    .anyOf(sessionIds)
+    .sortBy('openedAt');
+}
+
+/**
+ * All persisted trades for the general reports center. This intentionally
+ * includes historical records that predate journal sessions, while
+ * getJournalSessionTrades remains scoped to session-only analytics.
+ */
+export async function getTradesForReports(): Promise<Trade[]> {
   return db.trades.orderBy('openedAt').toArray();
+}
+
+/** تمام معاملات سشن‌های ژورنال برای analytics — با ترتیب زمانی */
+export async function getAllTradesForAnalytics(): Promise<Trade[]> {
+  return getJournalSessionTrades();
 }

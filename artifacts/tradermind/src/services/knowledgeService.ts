@@ -6,6 +6,7 @@ import {
   DEFAULT_CATEGORY_COLORS,
   PostTradeReviewData,
 } from '../db/database';
+import { getJournalSessionTrades } from '../core/repositories/tradeRepository';
 
 // ── Default categories ──────────────────────────────────────────────
 
@@ -480,7 +481,7 @@ export const knowledgeService = {
   // ── AI Insight generation ────────────────────────────────────────
 
   async generateAIInsights(): Promise<{ created: number; updated: number; insights: string[] }> {
-    const trades = await db.trades.where('status').equals('closed').toArray();
+    const trades = (await getJournalSessionTrades()).filter(trade => trade.status === 'closed');
     if (trades.length < 3) {
       return { created: 0, updated: 0, insights: ['حداقل ۳ معامله بسته نیاز است'] };
     }
@@ -792,7 +793,7 @@ export const knowledgeService = {
     regression: boolean;
     summary: string;
   } | null> {
-    const trades = await db.trades.where('status').equals('closed').toArray();
+    const trades = (await getJournalSessionTrades()).filter(trade => trade.status === 'closed');
     if (trades.length < 5) return null;
 
     type PTR = import('../db/database').PostTradeReviewData;

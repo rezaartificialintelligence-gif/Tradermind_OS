@@ -15,6 +15,7 @@ import { Button } from '../components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { toast } from 'sonner';
 import { db } from '../db/database';
+import { getJournalSessionTrades } from '../core/repositories/tradeRepository';
 import type { Trade } from '../db/database';
 import {
   calcBaseMetrics, getPerformanceProfile, getByDay, getByHour, getBySession,
@@ -179,7 +180,7 @@ export default function PerformanceDashboard() {
 
   useEffect(() => {
     Promise.all([
-      db.trades.toArray(),
+      getJournalSessionTrades(),
       db.knowledgeNotes.where('isRule').equals(1).toArray().catch(() => []),
     ]).then(([t, kn]) => {
       setTrades(t);

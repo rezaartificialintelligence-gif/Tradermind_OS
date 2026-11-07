@@ -48,6 +48,7 @@ import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
 import { toast } from 'sonner';
 import { logger } from '@/lib/logger';
 import { useAccountAnalyticsScope } from '../contexts/AccountAnalyticsContext';
+import { getJournalSessionTrades } from '../core/repositories/tradeRepository';
 
 import {
   UserCircle2, TrendingUp, TrendingDown, AlertTriangle, CheckCircle2, Info, XCircle,
@@ -1004,7 +1005,7 @@ export default function TraderProfile() {
   useEffect(() => {
     const loadData = async () => {
       try {
-        const t = await db.trades.toArray();
+        const t = await getJournalSessionTrades();
         const s = await db.strategies.toArray();
         setTrades(t);
         setStrategies(s);

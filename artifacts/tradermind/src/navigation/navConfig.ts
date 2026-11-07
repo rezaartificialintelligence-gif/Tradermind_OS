@@ -1,6 +1,6 @@
 import type { ElementType } from 'react';
 import {
-  LayoutDashboard, GitMerge, ActivitySquare, Wallet, BookOpen, BarChart3, HardDrive, Settings,
+  LayoutDashboard, GitMerge, ActivitySquare, BookOpen, BarChart3, HardDrive, Settings,
   TrendingUp, Zap, UserCircle2, Brain, RotateCcw, FileInput, ShieldCheck, Search, Shield,
   Calculator, Camera, Lightbulb, HeartPulse, CreditCard, Box, Bell, CalendarDays, SlidersHorizontal,
 } from 'lucide-react';
@@ -48,11 +48,6 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     title: t.nav.journal,
     items: [
-      {
-        href: "/journal/trades",
-        icon: Wallet,
-        label: t.nav.trades,
-      },
       {
         href: "/journal/sessions",
         icon: CalendarDays,
@@ -220,9 +215,9 @@ export const BOTTOM_ITEMS: NavLeaf[] = [
     label: "ژورنال",
   },
   {
-    href: "/journal/trades",
-    icon: Wallet,
-    label: "معاملات",
+    href: "/journal/sessions",
+    icon: CalendarDays,
+    label: "سشن‌ها",
   },
   {
     href: "/reports",
@@ -235,7 +230,7 @@ export const BOTTOM_ITEMS: NavLeaf[] = [
 export interface RailItem extends NavLeaf { match: string[]; exact?: boolean }
 export const RAIL_ITEMS: RailItem[] = [
   { href: '/', icon: LayoutDashboard, label: 'داشبورد', match: ['/'], exact: true },
-  { href: '/journal/trades', icon: Wallet, label: 'ژورنال معاملاتی', match: ['/journal'] },
+  { href: '/journal/sessions', icon: CalendarDays, label: 'ژورنال معاملاتی', match: ['/journal'] },
   { href: '/reports', icon: BarChart3, label: 'گزارش‌ها', match: ['/reports', '/performance', '/analytics/advanced', '/analytics/edge', '/journal/analytics', '/journal/insights'] },
   { href: '/risk/management', icon: ShieldCheck, label: 'مدیریت ریسک', match: ['/risk'] },
   { href: '/profile', icon: UserCircle2, label: 'پروفایل و آمار', match: ['/profile'] },

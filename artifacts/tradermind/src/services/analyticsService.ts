@@ -3,7 +3,14 @@
  * تمام توابع pure هستند و قابل Unit Test.
  */
 import { Trade, DailyJournal, Strategy } from '../db/database';
-import { isWin, isLoss, isClosed, toDateStr } from '../lib/tradeHelpers';
+import {
+  BEHAVIOR_FLAG_LABELS,
+  getBehaviorFlags,
+  isWin,
+  isLoss,
+  isClosed,
+  toDateStr,
+} from '../lib/tradeHelpers';
 import {
   getTradingDateParts,
   getTradingDayStart,
@@ -298,7 +305,11 @@ export function computeAnalytics(
   // ---- Emotion Performance ----
   const emotionGroups = new Map<string, Trade[]>();
   trades.forEach(t => {
-    parseEmotions(t.emotions).forEach(e => {
+    const recordedStates = new Set([
+      ...parseEmotions(t.emotions),
+      ...getBehaviorFlags(t).map(flag => BEHAVIOR_FLAG_LABELS[flag]),
+    ]);
+    recordedStates.forEach(e => {
       if (!emotionGroups.has(e)) emotionGroups.set(e, []);
       emotionGroups.get(e)!.push(t);
     });

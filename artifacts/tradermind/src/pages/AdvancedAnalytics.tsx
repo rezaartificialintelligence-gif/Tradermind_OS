@@ -11,6 +11,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { db } from '@/db/database';
+import { getJournalSessionTrades } from '@/core/repositories/tradeRepository';
 import type { Trade, Strategy } from '@/db/database';
 import {
   getByDay, getByHour, getBySession, getBySymbol, getBySetup,
@@ -162,7 +163,7 @@ export default function AdvancedAnalytics() {
       setLoading(true);
       try {
         const [trades, strats] = await Promise.all([
-          db.trades.toArray(),
+          getJournalSessionTrades(),
           db.strategies.toArray(),
         ]);
         if (!cancelled) { setAllTrades(trades); setStrategies(strats); }

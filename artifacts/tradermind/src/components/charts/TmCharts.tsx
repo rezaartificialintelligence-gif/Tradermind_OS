@@ -101,7 +101,7 @@ export function PnlBarChart({ data: raw, height = 220 }: { data: EquityPoint[]; 
           <ReferenceLine y={0} stroke="hsl(var(--foreground))" strokeOpacity={0.55} />
           <Tooltip content={<PointTooltip field="pnl" />} cursor={{ fill: 'hsl(var(--muted) / 0.4)' }} />
           <Bar dataKey="pnl" radius={[2, 2, 0, 0]} isAnimationActive animationDuration={450}>
-            {data.map((p, i) => <Cell key={i} fill={p.pnl >= 0 ? 'hsl(var(--tm-positive, 152 70% 48%))' : 'hsl(var(--tm-negative, 350 90% 62%))'} />)}
+            {data.map((p, i) => <Cell key={i} fill={p.pnl >= 0 ? 'hsl(var(--tm-positive))' : 'hsl(var(--tm-negative))'} />)}
           </Bar>
         </BarChart>
       </ResponsiveContainer>
@@ -113,9 +113,9 @@ const pct = (v: number) => `${v.toFixed(0)}%`;
 
 export function DistributionDonut({ distribution: d, size = 170 }: { distribution: Distribution; size?: number }) {
   const rows = [
-    { name: 'سودده', value: d.wins, color: 'hsl(var(--tm-positive, 152 70% 48%))' },
-    { name: 'ضرر', value: d.losses, color: 'hsl(var(--tm-negative, 350 90% 62%))' },
-    { name: 'سر به سر', value: d.breakeven, color: 'hsl(var(--muted-foreground, 212 30% 67%) / 0.6)' },
+    { name: 'سودده', value: d.wins, color: 'hsl(var(--tm-positive))' },
+    { name: 'ضرر', value: d.losses, color: 'hsl(var(--tm-negative))' },
+    { name: 'سر به سر', value: d.breakeven, color: 'hsl(var(--muted-foreground) / 0.6)' },
   ];
   const share = (v: number) => (d.total ? (v / d.total) * 100 : 0);
   return (

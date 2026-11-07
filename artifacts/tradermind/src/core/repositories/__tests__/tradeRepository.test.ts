@@ -9,6 +9,8 @@ import {
   getTradeById,
   getTradesBySymbol,
   getClosedTrades,
+  getJournalSessionTrades,
+  getTradesForReports,
 } from '../tradeRepository';
 
 // ─── داده‌های تستی ────────────────────────────────────────────────────────────
@@ -78,6 +80,7 @@ function makeTrade(overrides: Record<string, unknown> = {}) {
 
 beforeEach(async () => {
   await db.trades.clear();
+  await db.journalSessions.clear();
 });
 
 // ─── تست‌ها ──────────────────────────────────────────────────────────────────
@@ -149,6 +152,43 @@ describe('getClosedTrades', () => {
     const closed = await getClosedTrades();
     expect(closed.length).toBe(2);
     expect(closed.every(t => t.status === 'closed')).toBe(true);
+  });
+});
+
+describe('getJournalSessionTrades', () => {
+  it('فقط معاملات متصل به سشن موجود را برای گزارش‌ها برمی‌گرداند', async () => {
+    await db.journalSessions.add({ id: 'journal-session-1' } as any);
+    await db.journalSessions.add({ id: 'journal-session-2' } as any);
+    await db.trades.bulkAdd([
+      makeTrade({ id: 'session-trade-later', journalSessionId: 'journal-session-2', openedAt: 300 }),
+      makeTrade({ id: 'legacy-trade', journalSessionId: null, openedAt: 100 }),
+      makeTrade({ id: 'orphan-trade', journalSessionId: 'deleted-session', openedAt: 200 }),
+      makeTrade({ id: 'session-trade-earlier', journalSessionId: 'journal-session-1', openedAt: 150 }),
+    ]);
+
+    const trades = await getJournalSessionTrades();
+    expect(trades.map(trade => trade.id)).toEqual([
+      'session-trade-earlier',
+      'session-trade-later',
+    ]);
+  });
+});
+
+describe('getTradesForReports', () => {
+  it('keeps historical and session trades together in chronological order', async () => {
+    await db.journalSessions.add({ id: 'journal-session-1' } as any);
+    await db.trades.bulkAdd([
+      makeTrade({ id: 'session-trade', journalSessionId: 'journal-session-1', openedAt: 300 }),
+      makeTrade({ id: 'legacy-trade', journalSessionId: null, openedAt: 100 }),
+      makeTrade({ id: 'orphan-trade', journalSessionId: 'deleted-session', openedAt: 200 }),
+    ] as any);
+
+    const trades = await getTradesForReports();
+    expect(trades.map(trade => trade.id)).toEqual([
+      'legacy-trade',
+      'orphan-trade',
+      'session-trade',
+    ]);
   });
 });
 

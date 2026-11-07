@@ -5,6 +5,7 @@
  */
 
 import { db, Trade } from '../db/database';
+import { getJournalSessionTrades } from '../core/repositories/tradeRepository';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -130,7 +131,7 @@ export function scoreOneTrade(trade: Trade): TradeQualityScore {
 // ─── Aggregate metrics ────────────────────────────────────────────────────────
 
 export async function computeDataQuality(): Promise<DataQualityMetrics> {
-  const trades = await db.trades.toArray();
+  const trades = await getJournalSessionTrades();
   const total = trades.length;
 
   if (total === 0) {

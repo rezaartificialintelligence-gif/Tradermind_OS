@@ -1,18 +1,17 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Link, useLocation, useParams } from 'wouter';
 import {
   ArrowRight, CalendarClock, Check, CircleAlert, FilePlus2, Film, Image as ImageIcon,
-  ImagePlus, Paperclip, Pencil, Plus, Save, ShieldCheck, Target, Trash2, TrendingDown, TrendingUp, X,
+  Paperclip, Pencil, Plus, Save, ShieldCheck, Target, Trash2, TrendingDown, TrendingUp, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { accountService } from '../services/accountService';
-import { journalSessionService, parseJournalArray, tradeDirectionFromOption, triggerAnalysisIds, type JournalSessionBundle, type JournalSessionTimelineItem } from '../services/journalSessionService';
+import { journalSessionService, parseJournalArray, triggerAnalysisIds, type JournalSessionBundle, type JournalSessionTimelineItem } from '../services/journalSessionService';
 import { describeSessionMoment } from '../lib/sessionDateTime';
 import { classifyScenarioOutcome, SCENARIO_OUTCOME_TONE, scenarioAccuracy } from '../lib/scenarioOutcome';
 import { AnalysisFlexibleField } from '../components/journal/AnalysisFlexibleField';
 import { JournalMediaStrip } from '../components/journal/JournalMediaStrip';
-import { SessionTimeline } from '../components/journal/SessionTimeline';
-import { TriggerTradeForm, TriggerTradeSummary } from '../components/journal/TriggerTradeForm';
+import { buildJournalAnalysisSummary } from '../lib/journalAnalysisSummary';
 import { tradingBoxService } from '../services/tradingBoxService';
 import { deleteScreenshotForMedia, saveJournalMediaScreenshot } from '../services/screenshotIntelligenceService';
 import {
@@ -100,11 +99,23 @@ const localDate = (timestamp: number) => new Intl.DateTimeFormat('fa-IR', { date
 const money = (value: number) => new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 2 }).format(value);
 const statusName = (status: string) => status === 'active' ? 'در جریان' : status === 'completed' ? 'تکمیل‌شده' : 'لغوشده';
 const safeOptions = (options: JournalOption[], category: string) => options.filter(option => option.enabled && option.category === category);
+function getSessionListReturnTo(location: string): string {
+  const locationQuery = location.includes('?') ? location.slice(location.indexOf('?') + 1) : '';
+  const hash = typeof window !== 'undefined' ? window.location.hash.replace(/^#/, '') : '';
+  const hashQueryIndex = hash.indexOf('?');
+  const hashQuery = hashQueryIndex >= 0 ? hash.slice(hashQueryIndex + 1) : '';
+  const browserQuery = typeof window !== 'undefined' ? window.location.search.replace(/^\?/, '') : '';
+  const returnTo = new URLSearchParams(locationQuery || hashQuery || browserQuery).get('returnTo');
+  return returnTo && (returnTo.startsWith('/journal/sessions') || returnTo.startsWith('/journal/trades'))
+    ? returnTo
+    : '/journal/sessions';
+}
 
 export default function JournalSessionDetail() {
   const { id } = useParams<{ id: string }>();
   const sessionId = id ?? '';
-  const [, setLocation] = useLocation();
+  const [location, setLocation] = useLocation();
+  const sessionListReturnTo = getSessionListReturnTo(location);
   const [bundle, setBundle] = useState<JournalSessionBundle>();
   const [box, setBox] = useState<TradingBox>();
   const [loading, setLoading] = useState(true);
@@ -128,9 +139,6 @@ export default function JournalSessionDetail() {
     description: '', marketMovement: '', directionOptionId: 'none', confirmed: true, notes: '',
   });
   const [triggerSaving, setTriggerSaving] = useState(false);
-  const [triggerFiles, setTriggerFiles] = useState<File[]>([]);
-  const triggerFileInput = useRef<HTMLInputElement>(null);
-  const [openTradeFormId, setOpenTradeFormId] = useState<string | null>(null);
   const [editingTriggerId, setEditingTriggerId] = useState<string | null>(null);
   const [triggerEditDraft, setTriggerEditDraft] = useState<TriggerDraft>({
     timeframeOptionId: '', analysisEventIds: [], triggerTypeOptionId: 'none',
@@ -148,7 +156,6 @@ export default function JournalSessionDetail() {
   const [busyMediaId, setBusyMediaId] = useState('');
   const [busyEventId, setBusyEventId] = useState('');
   const [accountName, setAccountName] = useState('');
-  const [deletingSession, setDeletingSession] = useState(false);
 
   /**
    * silent=true: بارگذاری بی‌صدا؛ صفحه به حالت «در حال بارگذاری» نمی‌رود (اسکرول حفظ می‌شود)
@@ -328,23 +335,8 @@ export default function JournalSessionDetail() {
         confirmed: triggerDraft.confirmed,
         notes: triggerDraft.notes,
       });
-      // عکس‌هایی که هنگام نوشتن تریگر انتخاب شده‌اند، همین‌جا به تریگر وصل می‌شوند
-      if (triggerFiles.length > 0) {
-        let screenshotWarning = false;
-        for (const file of triggerFiles) {
-          const saved = await journalSessionService.saveMedia({ sessionId, triggerId: trigger.id, category: 'trigger', file, caption: '' });
-          if (file.type.startsWith('image/')) {
-            try { await saveJournalMediaScreenshot(saved, bundle.session); } catch { screenshotWarning = true; }
-          }
-        }
-        if (screenshotWarning) toast.warning('عکس‌ها در سشن ذخیره شدند، اما افزودن به کتابخانهٔ اسکرین‌شات انجام نشد.');
-        setTriggerFiles([]);
-      }
       if (continueToTrade) {
-        setTriggerDraft(current => ({ ...current, description: '', marketMovement: '', notes: '' }));
-        setOpenTradeFormId(trigger.id);
-        toast.success('تریگر ذخیره شد؛ اعداد معامله را زیر همان تریگر وارد کنید.');
-        await reloadSilent();
+        setLocation(`/journal/sessions/${encodeURIComponent(sessionId)}/trades/new?journalTriggerId=${encodeURIComponent(trigger.id)}&returnTo=${encodeURIComponent(`/journal/sessions/${sessionId}`)}`);
         return;
       }
       setTriggerDraft(current => ({ ...current, description: '', marketMovement: '', notes: '' }));
@@ -468,22 +460,6 @@ export default function JournalSessionDetail() {
     catch (cause) { toast.error(cause instanceof Error ? cause.message : 'حذف پیوست انجام نشد.'); }
     finally { setBusyMediaId(''); }
   };
-  const deleteSession = async () => {
-    const tradeCount = bundle?.trades.length ?? 0;
-    if (tradeCount > 0) {
-      toast.error(`این سشن ${tradeCount.toLocaleString('fa-IR')} معامله دارد؛ ابتدا معامله‌ها را حذف کنید یا از سشن جدا کنید.`);
-      return;
-    }
-    if (!window.confirm('این سشن همراه با همهٔ تحلیل‌ها، تریگرها، رویدادها و عکس‌هایش برای همیشه حذف شود؟ این کار قابل بازگشت نیست.')) return;
-    setDeletingSession(true);
-    try {
-      await journalSessionService.deleteSession(sessionId);
-      toast.success('سشن حذف شد.');
-      setLocation('/journal/sessions');
-    } catch (cause) {
-      toast.error(cause instanceof Error ? cause.message : 'حذف سشن انجام نشد.');
-    } finally { setDeletingSession(false); }
-  };
   const openMedia = (item: JournalMedia) => {
     const url = URL.createObjectURL(item.blob);
     const anchor = document.createElement('a');
@@ -497,7 +473,7 @@ export default function JournalSessionDetail() {
   </main>;
 
   if (!bundle) return <main dir="rtl" className="mx-auto w-full max-w-3xl space-y-5 p-4 pt-10 md:p-8" data-testid="status-session-not-found">
-    <Button variant="ghost" onClick={() => setLocation('/journal/sessions')} className="gap-2" data-testid="button-back-sessions"><ArrowRight className="h-4 w-4" />همهٔ سشن‌ها</Button>
+    <Button variant="ghost" onClick={() => setLocation(sessionListReturnTo)} className="gap-2" data-testid="button-back-sessions"><ArrowRight className="h-4 w-4" />همهٔ سشن‌ها</Button>
     <Card className="border-destructive/30"><CardContent className="flex flex-col items-center gap-3 p-8 text-center">
       <CircleAlert className="h-8 w-8 text-destructive" /><h1 className="font-semibold">دسترسی به سشن ممکن نیست</h1><p className="text-sm text-muted-foreground">{loadError || 'اطلاعاتی برای نمایش وجود ندارد.'}</p>
       <Button variant="outline" onClick={() => void reload()} data-testid="button-retry-session-detail">تلاش دوباره</Button>
@@ -520,9 +496,9 @@ export default function JournalSessionDetail() {
   const optionLabel = (optionId: string | null | undefined, fallback: string) =>
     bundleOptions.find(option => option.id === optionId)?.label ?? fallback;
 
-  return <main dir="rtl" className="tradermind-page-shell tm-session-page mx-auto w-full max-w-6xl space-y-5 p-4 pb-14 md:p-8" data-testid="page-journal-session-detail">
+  return <main dir="rtl" className="tradermind-page-shell mx-auto min-w-0 w-full max-w-6xl space-y-5 p-4 pb-14 [overflow-wrap:anywhere] md:p-8" data-testid="page-journal-session-detail">
     <div className="flex flex-wrap items-center justify-between gap-3">
-      <Button variant="ghost" className="gap-2 px-2 text-muted-foreground" onClick={() => setLocation('/journal/sessions')} data-testid="button-back-sessions"><ArrowRight className="h-4 w-4" />بازگشت به سشن‌ها</Button>
+      <Button variant="ghost" className="gap-2 px-2 text-muted-foreground" onClick={() => setLocation(sessionListReturnTo)} data-testid="button-back-sessions"><ArrowRight className="h-4 w-4" />بازگشت به سشن‌ها</Button>
       <Button className="gap-2" onClick={scrollToTrigger} data-testid="button-start-session-trade"><Plus className="h-4 w-4" />ثبت معامله در این سشن</Button>
     </div>
 
@@ -530,21 +506,21 @@ export default function JournalSessionDetail() {
       <div className="h-1 bg-gradient-to-l from-primary via-primary/45 to-transparent" />
       <CardContent className="p-5 md:p-7">
         <div className="flex flex-col justify-between gap-5 md:flex-row md:items-start">
-          <div className="space-y-3">
+          <div className="min-w-0 space-y-3">
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant={bundle.session.status === 'active' ? 'default' : 'secondary'} data-testid="status-session-detail">{statusName(bundle.session.status)}</Badge>
               {sessionType && <Badge variant="outline" data-testid="text-session-type">{sessionType}</Badge>}
               {marketName && <Badge variant="outline" data-testid="text-session-market">{marketName}</Badge>}
               {parseJournalArray(bundle.session.tags).map((tag, index) => <Badge key={`${tag}-${index}`} variant="outline" className="text-muted-foreground">{tag}</Badge>)}
             </div>
-            <div><h1 className="text-2xl font-bold tracking-tight sm:text-3xl">{parseJournalArray(bundle.session.symbols).join(' / ') || 'سشن بدون نماد'}</h1>
-              <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+            <div className="min-w-0"><h1 className="break-words text-2xl font-bold tracking-tight sm:text-3xl">{parseJournalArray(bundle.session.symbols).join(' / ') || 'سشن بدون نماد'}</h1>
+              <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 break-words text-sm text-muted-foreground">
                 <span data-testid="text-session-account">{accountName}</span><span>·</span><span data-testid="text-session-box">{box?.name ?? 'باکس در دسترس نیست'}</span><span>·</span><span data-testid="text-session-strategy">{bundle.strategyVersion?.strategyName ?? bundle.strategy?.name ?? 'استراتژی در دسترس نیست'}</span>
                 {bundle.strategyVersion && <span className="font-mono text-[11px]">نسخه {bundle.strategyVersion.versionNumber}</span>}
               </p>
             </div>
           </div>
-          <div className="flex shrink-0 items-center gap-2 rounded-xl border border-border/70 bg-muted/30 px-4 py-3 text-sm">
+          <div className="flex min-w-0 shrink-0 items-center gap-2 rounded-xl border border-border/70 bg-muted/30 px-4 py-3 text-sm md:max-w-[45%]">
             <CalendarClock className="h-4 w-4 text-primary" />
             {(() => {
               const moment = describeSessionMoment(bundle.session.startTime);
@@ -589,12 +565,69 @@ export default function JournalSessionDetail() {
     </Card>
 
     <section className="space-y-3" aria-labelledby="session-timeline-heading">
-      <div className="flex items-end justify-between gap-3"><div><p className="text-[10px] font-medium tracking-[0.18em] text-primary">SESSION HISTORY</p><h2 id="session-timeline-heading" className="mt-1 text-xl font-semibold">خط زمانی سشن</h2></div><span className="text-xs text-muted-foreground">{timelineItems.length} رویداد</span></div>
-      <SessionTimeline items={timelineItems} media={media} options={bundleOptions} analyses={analyses} fieldLabels={analysisFieldLabels} formatDate={localDate} />
+      <div className="flex flex-wrap items-end justify-between gap-3"><div className="min-w-0"><p className="text-[10px] font-medium tracking-[0.18em] text-primary">SESSION HISTORY</p><h2 id="session-timeline-heading" className="mt-1 text-xl font-semibold">خط زمانی سشن</h2></div><span className="max-w-full text-xs text-muted-foreground">{timelineItems.length} رویداد</span></div>
+      {timelineItems.length === 0 ? <Card className="border-dashed"><CardContent className="p-5 text-sm text-muted-foreground" data-testid="empty-session-timeline">هنوز رویدادی برای نمایش وجود ندارد.</CardContent></Card> : <Card className="tradermind-card overflow-hidden">
+        <div className="divide-y divide-border/70">
+          {timelineItems.map(item => {
+            const kindLabel = item.kind === 'analysis' ? 'تحلیل'
+              : item.kind === 'trigger' ? 'تریگر'
+                : item.kind === 'trade' ? 'معامله' : 'بدون معامله';
+            const summary = item.kind === 'analysis'
+              ? optionLabel(item.record.timeframeOptionId, 'تایم‌فریم حذف‌شده')
+              : item.kind === 'trigger'
+                ? `${optionLabel(item.record.timeframeOptionId, 'تایم‌فریم حذف‌شده')} · ${item.record.description || optionLabel(item.record.triggerTypeOptionId, 'تریگر')}`
+                : item.kind === 'trade'
+                  ? `${item.record.symbol} · ${item.record.status === 'open' ? 'باز' : item.record.result}`
+                  : optionLabel(item.record.typeOptionId, 'رویداد');
+            const analysisSummary = item.kind === 'analysis'
+              ? buildJournalAnalysisSummary(item.record, analysisFieldLabels, bundleOptions, bundle.trades)
+              : null;
+            const analysisMedia = item.kind === 'analysis'
+              ? media.filter(mediaItem => mediaItem.analysisId === item.id)
+              : [];
+            const details = item.kind === 'trigger' ? item.record.marketMovement || item.record.notes
+                : item.kind === 'event' ? item.record.notes : '';
+            return <div key={`${item.kind}-${item.id}`} className="flex items-start gap-3 px-4 py-3" data-testid={`timeline-item-${item.kind}-${item.id}`}>
+              <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-primary/70" />
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2"><Badge variant="outline" className="text-[10px]">{kindLabel}</Badge>
+                  {item.kind === 'trade' ? <Link href={`/journal/trades/${item.record.id}?returnTo=${encodeURIComponent(`/journal/sessions/${sessionId}`)}`} className="text-sm font-medium text-primary hover:underline" data-testid={`timeline-trade-link-${item.id}`}>{summary}</Link> : <span className="text-sm font-medium">{summary}</span>}
+                  <span className="text-[10px] text-muted-foreground">{localDate(item.timestamp)}</span>
+                </div>
+                {item.kind === 'analysis' && analysisSummary && (
+                  <div className="mt-2 space-y-2" data-testid={`timeline-analysis-summary-${item.id}`}>
+                    {analysisSummary.rows.length > 0 ? <div className="grid gap-2 sm:grid-cols-2">
+                      {analysisSummary.rows.map(row => <div key={row.key} className="min-w-0 rounded-md bg-muted/30 px-2.5 py-2">
+                        <p className="text-[10px] font-medium text-muted-foreground">{row.label}</p>
+                        <p className="mt-0.5 whitespace-pre-wrap break-words text-xs leading-5">{row.value}</p>
+                      </div>)}
+                    </div> : <p className="text-xs text-muted-foreground">برای این تحلیل هنوز جزئیاتی ثبت نشده است.</p>}
+                    {analysisSummary.tags.length > 0 && <div className="flex flex-wrap items-center gap-1.5" data-testid={`timeline-analysis-tags-${item.id}`}>
+                      <span className="text-[10px] text-muted-foreground">{analysisFieldLabels.tags}:</span>
+                      {analysisSummary.tags.map(tag => <Badge key={tag} variant="secondary" className="text-[10px]">{tag}</Badge>)}
+                    </div>}
+                    {analysisMedia.length > 0 && <div className="flex flex-wrap items-center gap-1.5" data-testid={`timeline-analysis-media-${item.id}`}>
+                      <span className="text-[10px] text-muted-foreground">پیوست‌های تحلیل:</span>
+                      {analysisMedia.map(mediaItem => <button
+                        key={mediaItem.id}
+                        type="button"
+                        onClick={() => openMedia(mediaItem)}
+                        className="max-w-full truncate rounded-full border border-border/70 px-2 py-1 text-[10px] text-primary hover:bg-primary/5"
+                        data-testid={`button-open-timeline-media-${mediaItem.id}`}
+                      >{mediaItem.caption || mediaItem.fileName}</button>)}
+                    </div>}
+                  </div>
+                )}
+                {details && <p className="mt-1 break-words whitespace-pre-wrap text-xs leading-5 text-muted-foreground">{details}</p>}
+              </div>
+            </div>;
+          })}
+        </div>
+      </Card>}
     </section>
 
     <section className="space-y-3" aria-labelledby="analysis-heading">
-      <div className="flex items-end justify-between gap-3"><div><p className="text-[10px] font-medium tracking-[0.18em] text-primary">MARKET CONTEXT</p><h2 id="analysis-heading" className="mt-1 text-xl font-semibold">رویدادهای تحلیل چندبازه‌ای</h2></div><span className="text-xs text-muted-foreground">{analyses.length} رویداد تحلیل</span></div>
+      <div className="flex flex-wrap items-end justify-between gap-3"><div className="min-w-0"><p className="text-[10px] font-medium tracking-[0.18em] text-primary">MARKET CONTEXT</p><h2 id="analysis-heading" className="mt-1 text-xl font-semibold">رویدادهای تحلیل چندبازه‌ای</h2></div><span className="max-w-full text-xs text-muted-foreground">{analyses.length} رویداد تحلیل</span></div>
       {timeframes.length === 0 ? <Card className="border-dashed"><CardContent className="p-5 text-sm text-muted-foreground" data-testid="empty-enabled-timeframes">تایم‌فریم فعالی برای تحلیل وجود ندارد. گزینه‌های غیرفعال عمداً قابل انتخاب نیستند.</CardContent></Card> : (
         <Card className="tradermind-card">
           <CardContent className="space-y-3 p-4">
@@ -615,7 +648,7 @@ export default function JournalSessionDetail() {
         </Card>
       )}
       {analyses.length === 0 ? <Card className="border-dashed"><CardContent className="p-5 text-center text-sm text-muted-foreground" data-testid="empty-analysis-events">هنوز رویدادی ثبت نشده است.</CardContent></Card> : (
-        <div className="grid grid-cols-1 gap-4">
+        <div className="grid gap-4">
           {analyses.map((analysis, index) => {
             const draft = analysisDrafts[analysis.id] ?? toDraft(analysis);
             const selectField = (label: string, category: string, value: string, setValue: (next: string) => void, testId: string) => {
@@ -642,8 +675,8 @@ export default function JournalSessionDetail() {
               />;
             };
             return <Card key={analysis.id} className="tradermind-card overflow-hidden" data-testid={`card-analysis-${analysis.id}`}>
-              <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-border/70 bg-muted/20 px-4 py-3">
-                <div className="flex flex-wrap items-center gap-2"><span className="font-mono text-xs text-primary">{String(index + 1).padStart(2, '0')}</span><h3 className="font-semibold">{optionLabel(analysis.timeframeOptionId, 'تایم‌فریم حذف‌شده')}</h3><Badge variant="outline" className="text-[10px]">رویداد مستقل</Badge>
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/70 bg-muted/20 px-4 py-3">
+                <div className="flex min-w-0 flex-wrap items-center gap-2"><span className="font-mono text-xs text-primary">{String(index + 1).padStart(2, '0')}</span><h3 className="font-semibold">{optionLabel(analysis.timeframeOptionId, 'تایم‌فریم حذف‌شده')}</h3><Badge variant="outline" className="text-[10px]">رویداد مستقل</Badge>
                   {analysis.scenarioOutcomeOptionId && <span className={`rounded-full border px-2 py-0.5 text-[10px] ${SCENARIO_OUTCOME_TONE[classifyScenarioOutcome(optionLabel(analysis.scenarioOutcomeOptionId, ''))]}`} data-testid={`badge-scenario-outcome-${analysis.id}`}>{optionLabel(analysis.scenarioOutcomeOptionId, 'نتیجه')}</span>}</div>
                 <span className="text-[10px] text-muted-foreground">{localDate(analysis.createdAt)}</span>
               </div>
@@ -699,7 +732,7 @@ export default function JournalSessionDetail() {
     </section>
 
     <section id="journal-trigger-capture" className="space-y-3" aria-labelledby="trigger-heading">
-      <div className="flex items-end justify-between gap-3"><div><p className="text-[10px] font-medium tracking-[0.18em] text-primary">EXECUTION TRIGGER</p><h2 id="trigger-heading" className="mt-1 text-xl font-semibold">تریگر و ثبت معامله</h2></div><Badge variant="outline" data-testid="text-trigger-count">{triggers.length} تریگر · {triggers.filter(item => item.status === 'ignored').length} نادیده · {triggers.filter(item => item.status === 'invalid').length} نامعتبر</Badge></div>
+      <div className="flex flex-wrap items-end justify-between gap-3"><div className="min-w-0"><p className="text-[10px] font-medium tracking-[0.18em] text-primary">EXECUTION TRIGGER</p><h2 id="trigger-heading" className="mt-1 text-xl font-semibold">تریگر و ثبت معامله</h2></div><Badge variant="outline" className="max-w-full whitespace-normal text-right" data-testid="text-trigger-count">{triggers.length} تریگر · {triggers.filter(item => item.status === 'ignored').length} نادیده · {triggers.filter(item => item.status === 'invalid').length} نامعتبر</Badge></div>
       <Card className="tradermind-card" data-testid="card-trigger-capture">
         <CardContent className="space-y-4 p-4">
           <p className="text-sm leading-6 text-muted-foreground">تریگر 1M را پیش از ورود ثبت کنید. در صورت تأیید، ادامه به فرم اجرا، ارتباط تریگر و تحلیل انتخابی را با معامله حفظ می‌کند.</p>
@@ -738,16 +771,6 @@ export default function JournalSessionDetail() {
             <div className="space-y-1.5"><Label className="text-xs">شرح تریگر</Label><Textarea rows={2} value={triggerDraft.description} onChange={event => setTriggerDraft(current => ({ ...current, description: event.target.value }))} data-testid="input-trigger-description" /></div>
             <div className="space-y-1.5"><Label className="text-xs">حرکت قیمت و واکنش بازار</Label><Textarea rows={2} value={triggerDraft.marketMovement} onChange={event => setTriggerDraft(current => ({ ...current, marketMovement: event.target.value }))} data-testid="input-trigger-market-movement" /></div>
             <div className="space-y-1.5 sm:col-span-2"><Label className="text-xs">یادداشت تریگر</Label><Textarea rows={2} value={triggerDraft.notes} onChange={event => setTriggerDraft(current => ({ ...current, notes: event.target.value }))} data-testid="input-trigger-notes" /></div>
-          </div>
-          <div className="space-y-2 rounded-lg border border-dashed border-border/80 bg-muted/10 p-3" data-testid="trigger-draft-media">
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-xs font-medium text-muted-foreground">عکس تریگر{triggerFiles.length ? ` · ${triggerFiles.length.toLocaleString('fa-IR')}` : ''}</p>
-              <input ref={triggerFileInput} type="file" accept="image/*" multiple className="hidden" onChange={event => { const files = Array.from(event.target.files ?? []); event.target.value = ''; if (files.length) setTriggerFiles(current => [...current, ...files]); }} data-testid="trigger-draft-media-input" />
-              <Button type="button" size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={() => triggerFileInput.current?.click()} data-testid="trigger-draft-media-add"><ImagePlus className="h-3.5 w-3.5" />افزودن عکس</Button>
-            </div>
-            {triggerFiles.length > 0 && <ul className="space-y-1 text-xs" data-testid="trigger-draft-media-list">
-              {triggerFiles.map((file, index) => <li key={`${file.name}-${index}`} className="flex items-center justify-between gap-2 rounded-md border border-border/60 px-2 py-1"><span className="min-w-0 truncate">{file.name}</span><button type="button" aria-label="حذف عکس" className="shrink-0 text-muted-foreground hover:text-destructive" onClick={() => setTriggerFiles(current => current.filter((_, i) => i !== index))}><X className="h-3.5 w-3.5" /></button></li>)}
-            </ul>}
           </div>
           <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={triggerDraft.confirmed} onChange={event => setTriggerDraft(current => ({ ...current, confirmed: event.target.checked }))} data-testid="checkbox-trigger-confirmed" />تریگر تأیید شده است</label>
           <div className="flex flex-col gap-2 sm:flex-row">
@@ -798,9 +821,9 @@ export default function JournalSessionDetail() {
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2"><Badge variant="outline">{optionLabel(trigger.timeframeOptionId, 'بازهٔ زمانی حذف‌شده')}</Badge><Badge variant={trigger.status === 'converted' ? 'default' : 'secondary'}>{trigger.status === 'converted' ? 'متصل به معامله' : trigger.status === 'ignored' ? 'نادیده' : trigger.status === 'invalid' ? 'نامعتبر' : 'در انتظار'}</Badge><span className="text-xs text-muted-foreground">{optionLabel(trigger.triggerTypeOptionId, 'تریگر')}</span></div>
-                  <p className="mt-2 whitespace-pre-wrap text-sm font-medium">{trigger.description || 'بدون شرح'}</p>
-                  {trigger.marketMovement && <p className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">{trigger.marketMovement}</p>}
-                  {trigger.notes && <p className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">{trigger.notes}</p>}
+                  <p className="mt-2 break-words whitespace-pre-wrap text-sm font-medium">{trigger.description || 'بدون شرح'}</p>
+                  {trigger.marketMovement && <p className="mt-1 break-words whitespace-pre-wrap text-xs text-muted-foreground">{trigger.marketMovement}</p>}
+                  {trigger.notes && <p className="mt-1 break-words whitespace-pre-wrap text-xs text-muted-foreground">{trigger.notes}</p>}
                   {triggerAnalysisIds(trigger).length > 0 && <div className="mt-2 flex flex-wrap items-center gap-1.5" data-testid={`row-trigger-analyses-${trigger.id}`}>
                     <span className="text-[10px] text-muted-foreground">تحلیل مرتبط:</span>
                     {triggerAnalysisIds(trigger).map(analysisId => {
@@ -816,19 +839,9 @@ export default function JournalSessionDetail() {
                   {!trigger.linkedTradeId ? <Select value={trigger.status} onValueChange={value => void updateTriggerStatus(trigger.id, value as 'pending' | 'ignored' | 'invalid')}>
                     <SelectTrigger className="h-8 w-32 text-xs" data-testid={`select-trigger-status-${trigger.id}`}><SelectValue /></SelectTrigger>
                     <SelectContent><SelectItem value="pending">در انتظار</SelectItem><SelectItem value="ignored">نادیده</SelectItem><SelectItem value="invalid">نامعتبر</SelectItem></SelectContent>
-                  </Select> : <Link href={`/journal/trades/${trigger.linkedTradeId}`} className="rounded-md border px-3 py-2 text-xs text-primary" data-testid={`link-trigger-trade-${trigger.id}`}>مشاهدهٔ معامله</Link>}
-                  {!trigger.linkedTradeId && <Button type="button" size="sm" variant="outline" disabled={!trigger.confirmed} onClick={() => setOpenTradeFormId(current => current === trigger.id ? null : trigger.id)} data-testid={`button-start-trigger-trade-${trigger.id}`}>{openTradeFormId === trigger.id ? 'بستن فرم معامله' : 'ثبت معامله'}</Button>}
+                  </Select> : <Link href={`/journal/trades/${trigger.linkedTradeId}?returnTo=${encodeURIComponent(`/journal/sessions/${sessionId}`)}`} className="rounded-md border px-3 py-2 text-xs text-primary" data-testid={`link-trigger-trade-${trigger.id}`}>مشاهدهٔ معامله</Link>}
+                  {!trigger.linkedTradeId && <Button type="button" size="sm" variant="outline" disabled={!trigger.confirmed} onClick={() => setLocation(`/journal/sessions/${encodeURIComponent(sessionId)}/trades/new?journalTriggerId=${encodeURIComponent(trigger.id)}&returnTo=${encodeURIComponent(`/journal/sessions/${sessionId}`)}`)} data-testid={`button-start-trigger-trade-${trigger.id}`}>ثبت معامله</Button>}
                 </div>
-                {trigger.linkedTradeId && (() => { const linked = bundle.trades.find(item => item.id === trigger.linkedTradeId); return linked ? <TriggerTradeSummary trade={linked} onChanged={reloadSilent} /> : null; })()}
-                {!trigger.linkedTradeId && openTradeFormId === trigger.id && trigger.confirmed && (
-                  <TriggerTradeForm
-                    session={bundle.session}
-                    trigger={trigger}
-                    suggestedDirection={tradeDirectionFromOption(bundleOptions.find(option => option.id === trigger.directionOptionId))}
-                    defaultSymbol={parseJournalArray(bundle.session.symbols)[0] ?? ''}
-                    onSaved={async () => { setOpenTradeFormId(null); await reloadSilent(); }}
-                  />
-                )}
               </div>
             )}
           </div>)}
@@ -836,7 +849,7 @@ export default function JournalSessionDetail() {
       </Card>
     </section>
 
-    <section className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[1.2fr_.8fr]">
+    <section className="grid items-start gap-4 lg:grid-cols-[1.2fr_.8fr]">
       <Card className="tradermind-card" data-testid="card-session-review">
         <div className="border-b border-border/70 px-5 py-4"><h2 className="font-semibold">مرور و جمع‌بندی</h2><p className="mt-1 text-xs text-muted-foreground">یادداشت‌های سشن پس از پایان نیز در همین دستگاه می‌مانند.</p></div>
         <CardContent className="p-5">
@@ -907,7 +920,7 @@ export default function JournalSessionDetail() {
     </section>
 
     <section className="space-y-3" aria-labelledby="linked-trades-heading">
-      <div className="flex items-end justify-between gap-3"><div><p className="text-[10px] font-medium tracking-[0.18em] text-primary">EXECUTION LOG</p><h2 id="linked-trades-heading" className="mt-1 text-xl font-semibold">معاملات متصل</h2></div><Badge variant="outline" data-testid="text-linked-trade-count">{bundle.trades.length} معامله</Badge></div>
+      <div className="flex flex-wrap items-end justify-between gap-3"><div className="min-w-0"><p className="text-[10px] font-medium tracking-[0.18em] text-primary">EXECUTION LOG</p><h2 id="linked-trades-heading" className="mt-1 text-xl font-semibold">معاملات متصل</h2></div><Badge variant="outline" className="max-w-full" data-testid="text-linked-trade-count">{bundle.trades.length} معامله</Badge></div>
       {bundle.trades.length === 0 ? <Card className="border-dashed bg-card/50" data-testid="empty-linked-trades"><CardContent className="flex flex-col items-center gap-3 p-8 text-center">
         <Target className="h-7 w-7 text-muted-foreground/70" /><h3 className="font-semibold">هنوز معامله‌ای به این سشن وصل نیست</h3><p className="max-w-md text-sm leading-6 text-muted-foreground">وقتی آمادهٔ اجرا هستید، فرم ثبت معامله را از اینجا باز کنید تا پیوند سشن حفظ شود.</p>
               <Button onClick={scrollToTrigger} className="gap-2" data-testid="button-first-linked-trade"><Plus className="h-4 w-4" />شروع ثبت معامله</Button>
@@ -916,25 +929,18 @@ export default function JournalSessionDetail() {
           const resultLabel = trade.status === 'open' ? 'باز' : trade.result === 'win' || trade.result === 'partial-win' ? 'سود' : trade.result === 'loss' || trade.result === 'partial-loss' ? 'زیان' : trade.result === 'cancelled' ? 'لغوشده' : 'سر به سر';
           const pnl = trade.profitLoss;
           return <div key={trade.id} className="flex items-center gap-2 px-4 py-3 transition-colors hover:bg-muted/30 sm:px-5" data-testid={`row-linked-trade-${trade.id}`}>
-            <Link href={`/journal/trades/${trade.id}`} className="flex min-w-0 flex-1 items-center justify-between gap-4 py-1" data-testid={`link-linked-trade-${trade.id}`}>
+            <Link href={`/journal/trades/${trade.id}?returnTo=${encodeURIComponent(`/journal/sessions/${sessionId}`)}`} className="flex min-w-0 flex-1 items-center justify-between gap-4 py-1" data-testid={`link-linked-trade-${trade.id}`}>
               <span className="flex min-w-0 items-center gap-3">
                 <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg ${trade.direction === 'long' ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'bg-rose-500/10 text-rose-700 dark:text-rose-300'}`}>{trade.direction === 'long' ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}</span>
                 <span className="min-w-0"><span className="flex flex-wrap items-center gap-2 font-semibold"><span>{trade.symbol}</span><Badge variant="outline" className="text-[10px]">{directionName(trade)}</Badge><Badge variant={trade.status === 'open' ? 'secondary' : 'outline'} className="text-[10px]">{resultLabel}</Badge></span><span className="mt-1 block text-xs text-muted-foreground">{localDate(trade.openedAt)}{trade.rMultiple != null ? ` · ${money(trade.rMultiple)}R` : ''}</span></span>
               </span>
               <span className={`shrink-0 text-left font-mono text-sm font-semibold ${pnl == null ? 'text-muted-foreground' : pnl >= 0 ? 'text-emerald-700 dark:text-emerald-300' : 'text-rose-700 dark:text-rose-300'}`}>{pnl == null ? '—' : money(pnl)}</span>
             </Link>
-            <Link href={`/journal/trades/${trade.id}/journal`} className="shrink-0 rounded-md border px-3 py-2 text-xs font-medium text-primary transition-colors hover:bg-primary/5" data-testid={`link-trade-review-${trade.id}`}>مرور ژورنال</Link>
+             <Link href={`/journal/trades/${trade.id}/journal?returnTo=${encodeURIComponent(`/journal/sessions/${sessionId}`)}`} className="shrink-0 rounded-md border px-3 py-2 text-xs font-medium text-primary transition-colors hover:bg-primary/5" data-testid={`link-trade-review-${trade.id}`}>مرور ژورنال</Link>
           </div>;
         })}</div>
       </Card>}
     </section>
-    <Card className="border-destructive/30" data-testid="card-delete-session">
-      <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="min-w-0"><h2 className="text-sm font-semibold text-destructive">حذف این سشن</h2>
-          <p className="mt-1 text-xs leading-5 text-muted-foreground">اگر سشن را اشتباهاً ساخته‌اید، می‌توانید آن را با همهٔ تحلیل‌ها، تریگرها، رویدادها و عکس‌هایش حذف کنید. سشنی که معامله دارد قابل حذف نیست.</p></div>
-        <Button type="button" variant="outline" onClick={() => void deleteSession()} disabled={deletingSession} className="shrink-0 gap-2 border-destructive/40 text-destructive hover:bg-destructive/10" data-testid="button-delete-session"><Trash2 className="h-4 w-4" />{deletingSession ? 'در حال حذف…' : 'حذف سشن'}</Button>
-      </CardContent>
-    </Card>
     <div className="flex items-center gap-2 border-t border-border/60 pt-4 text-[11px] text-muted-foreground"><ShieldCheck className="h-3.5 w-3.5 text-primary" />سوابق سشن و پیوست‌ها روی همین دستگاه نگهداری می‌شوند.</div>
   </main>;
 }

@@ -5,6 +5,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Skeleton } from '../components/ui/skeleton';
 import { db } from '../db/database';
+import { getJournalSessionTrades } from '../core/repositories/tradeRepository';
 import { useAccountAnalyticsScope } from '../contexts/AccountAnalyticsContext';
 import { Trade, Strategy } from '../db/database';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
@@ -1050,7 +1051,7 @@ export default function EdgeAnalytics() {
     : -new Date().getTimezoneOffset() / 60;
 
   useEffect(() => {
-    Promise.all([db.trades.toArray(), db.strategies.toArray()])
+    Promise.all([getJournalSessionTrades(), db.strategies.toArray()])
       .then(([ts, ss]) => { setTrades(ts); setStrategies(ss); setLoading(false); });
   }, []);
 

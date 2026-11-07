@@ -18,7 +18,6 @@ const COLORS = ['#3b82f6', '#22c55e', '#f97316', '#a855f7', '#ec4899', '#14b8a6'
 const emptyForm = {
   name: '',
   broker: '',
-  accountNumber: '',
   currency: 'USD',
   initialBalance: '',
   currentBalance: '',
@@ -36,6 +35,15 @@ export default function Accounts() {
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const editingAccount = accounts.find(account => account.id === editingId) ?? null;
+  const initialBalanceValue = form.initialBalance.trim() ? Number(form.initialBalance) : null;
+  const calculatedDialogBalance =
+    initialBalanceValue != null && Number.isFinite(initialBalanceValue)
+      ? initialBalanceValue +
+        (editingAccount?.initialBalance != null && editingAccount.currentBalance != null
+          ? editingAccount.currentBalance - editingAccount.initialBalance
+          : 0)
+      : null;
 
   const load = async () => {
     const [accountRows, boxRows] = await Promise.all([accountService.getAll(), tradingBoxService.getAll()]);
@@ -56,7 +64,6 @@ export default function Accounts() {
     setForm({
       name: acc.name,
       broker: acc.broker,
-      accountNumber: acc.accountNumber ?? '',
       currency: acc.currency,
       initialBalance: acc.initialBalance?.toString() ?? '',
       currentBalance: acc.currentBalance?.toString() ?? '',
@@ -74,13 +81,15 @@ export default function Accounts() {
       return;
     }
     setSaving(true);
+    const initialBalance = form.initialBalance ? parseFloat(form.initialBalance) : null;
     const data = {
       name: form.name.trim(),
       broker: form.broker.trim(),
-      accountNumber: form.accountNumber.trim() || null,
       currency: form.currency,
-      initialBalance: form.initialBalance ? parseFloat(form.initialBalance) : null,
-      currentBalance: form.currentBalance ? parseFloat(form.currentBalance) : null,
+      initialBalance,
+      currentBalance: initialBalance != null
+        ? calculatedDialogBalance
+        : form.currentBalance ? parseFloat(form.currentBalance) : null,
       color: form.color,
       isDefault: form.isDefault,
       tradingBoxIds: form.tradingBoxIds.filter(id => tradingBoxes.some(box => box.id === id)),
@@ -89,11 +98,9 @@ export default function Accounts() {
     try {
       if (editingId) {
         await accountService.update(editingId, data);
-        await accountService.recalculateBalance(editingId);
         toast.success('حساب به‌روز شد');
       } else {
-        const created = await accountService.create(data);
-        await accountService.recalculateBalance(created.id);
+        await accountService.create(data);
         toast.success('حساب جدید اضافه شد');
       }
       await load();
@@ -176,21 +183,9 @@ export default function Accounts() {
                     <span className="text-muted-foreground">ارز: </span>
                     <span className="font-medium">{acc.currency}</span>
                   </div>
-                  {acc.accountNumber && (
-                    <div className="col-span-2 min-w-0 break-words">
-                      <span className="text-muted-foreground">شمارهٔ حساب: </span>
-                      <span className="font-medium" dir="ltr">{acc.accountNumber}</span>
-                    </div>
-                  )}
-                  {acc.initialBalance != null && (
-                    <div>
-                      <span className="text-muted-foreground">موجودی اولیه: </span>
-                      <span className="font-medium">{acc.initialBalance.toLocaleString()}</span>
-                    </div>
-                  )}
                   {acc.currentBalance != null && (
                     <div>
-                      <span className="text-muted-foreground">موجودی فعلی: </span>
+                      <span className="text-muted-foreground">موجودی: </span>
                       <span className="font-medium">{acc.currentBalance.toLocaleString()}</span>
                     </div>
                   )}
@@ -268,21 +263,31 @@ export default function Accounts() {
               )}
               <p className="text-xs text-muted-foreground">یک یا چند باکس را انتخاب کنید. تغییر این فهرست فقط انتخاب‌های آینده را محدود می‌کند و معاملات قبلی را تغییر نمی‌دهد.</p>
             </div>
-            <div className="space-y-2">
-              <Label>شمارهٔ حساب</Label>
-              <Input dir="ltr" placeholder="شمارهٔ حساب نزد بروکر" value={form.accountNumber} onChange={e => setForm(f => ({ ...f, accountNumber: e.target.value }))} data-testid="input-account-number" />
-            </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
                 <Label>موجودی اولیه</Label>
                 <Input type="number" placeholder="0" value={form.initialBalance} onChange={e => setForm(f => ({ ...f, initialBalance: e.target.value }))} />
               </div>
-              <div className="space-y-2">
-                <Label>موجودی فعلی</Label>
-                <Input type="number" placeholder="0" value={form.currentBalance} disabled={form.initialBalance.trim() !== ''} onChange={e => setForm(f => ({ ...f, currentBalance: e.target.value }))} />
-              </div>
+              {initialBalanceValue != null && Number.isFinite(initialBalanceValue) ? (
+                <div className="col-span-2 space-y-2">
+                  <Label>موجودی فعلی محاسبه‌شده</Label>
+                  <div className="flex h-10 items-center rounded-md border bg-muted/30 px-3 text-sm font-medium" dir="ltr">
+                    {(calculatedDialogBalance ?? initialBalanceValue).toLocaleString()} {form.currency}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    موجودی اولیه به‌علاوهٔ سود و زیان خالص معاملات بسته‌شدهٔ این حساب، شامل معاملات تاریخی.
+                  </p>
+                </div>
+              ) : (
+                <div className="col-span-2 space-y-2">
+                  <Label>موجودی فعلی</Label>
+                  <Input type="number" placeholder="0" value={form.currentBalance} onChange={e => setForm(f => ({ ...f, currentBalance: e.target.value }))} />
+                  <p className="text-xs text-muted-foreground">
+                    برای به‌روزرسانی خودکار موجودی با سود و زیان معاملات، موجودی اولیه را هم وارد کنید.
+                  </p>
+                </div>
+              )}
             </div>
-            {form.initialBalance.trim() !== '' && <p className="text-xs text-muted-foreground" data-testid="text-balance-auto">موجودی فعلی خودکار است: موجودی اولیه + جمع سود و زیان معاملات بسته‌شدهٔ این حساب. با ثبت یا ویرایش هر معامله به‌روز می‌شود.</p>}
             <div className="space-y-2">
               <Label>یادداشت</Label>
               <Textarea placeholder="توضیحات اضافی…" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} className="min-h-[70px]" />

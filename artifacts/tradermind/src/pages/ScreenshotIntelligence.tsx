@@ -29,6 +29,7 @@ import {
   computeOutcomeDistribution, generateVisualBriefing, getScreenshotStats,
 } from '../services/screenshotIntelligenceService';
 import { assessImageQuality } from '../services/visualAnalysisService';
+import { getJournalSessionTrades } from '../core/repositories/tradeRepository';
 import { compressImage } from '../lib/imageCompression';
 import {
   ChartScreenshotType, PatternTag, PATTERN_TAG_LABELS,
@@ -92,7 +93,7 @@ export default function ScreenshotIntelligence() {
 
   const { data: allTrades = [] } = useQuery<Trade[]>({
     queryKey: ['trades'],
-    queryFn: () => db.trades.toArray(),
+    queryFn: getJournalSessionTrades,
   });
 
   const { data: stats } = useQuery({

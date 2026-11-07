@@ -1,5 +1,4 @@
 import { runAsRemote } from '../db/syncSupport';
-import { deleteScreenshotForMedia } from './screenshotIntelligenceService';
 import { stableOptionId } from '../db/defaultIds';
 import { kvStore } from './storageService';
 import { exportAnalysisFieldConfig, importAnalysisFieldConfig } from './journalAnalysisFieldLabels';
@@ -361,7 +360,7 @@ function optionRecord(
   };
 }
 
-export function tradeDirectionFromOption(option: JournalOption | undefined | null): Trade['direction'] | null {
+function tradeDirectionFromOption(option: JournalOption | undefined | null): Trade['direction'] | null {
   if (!option || option.category !== 'direction') return null;
   const label = localizeJournalOptionLabel(option.category, option.label).trim().toLocaleLowerCase();
   if (['صعودی', 'خرید', 'long', 'buy', 'bullish', 'up'].includes(label)) return 'long';
@@ -690,38 +689,6 @@ export const journalSessionService = {
       endTime: nextStatus === 'active' ? null : (patch.endTime ?? current.endTime ?? Date.now()),
       updatedAt: Date.now(),
     });
-  },
-
-  /**
-   * حذف کامل یک سشن که اشتباهاً ساخته شده (همراه تحلیل‌ها، تریگرها، رویدادها و پیوست‌ها).
-   * اگر معامله‌ای به سشن وصل باشد حذف انجام نمی‌شود تا سوابق معاملاتی ناخواسته پاک نشوند.
-   */
-  async deleteSession(id: string): Promise<void> {
-    const session = await db.journalSessions.get(id);
-    if (!session) return;
-    const linkedTrades = await db.trades.where('journalSessionId').equals(id).count();
-    if (linkedTrades > 0) {
-      throw new Error(`این سشن ${linkedTrades} معامله دارد. ابتدا معامله‌ها را حذف کنید یا از سشن جدا کنید؛ سپس سشن قابل حذف است.`);
-    }
-    const mediaIds = (await db.journalMedia.where('sessionId').equals(id).primaryKeys()) as string[];
-    await db.transaction('rw', [
-      db.journalSessions, db.journalSessionAnalyses, db.journalTriggerEvents,
-      db.journalSessionEvents, db.journalMedia, db.journalTradeData, db.strategyVersions,
-    ], async () => {
-      await db.journalSessionAnalyses.where('sessionId').equals(id).delete();
-      await db.journalTriggerEvents.where('sessionId').equals(id).delete();
-      await db.journalSessionEvents.where('sessionId').equals(id).delete();
-      await db.journalMedia.where('sessionId').equals(id).delete();
-      await db.journalTradeData.where('journalSessionId').equals(id).delete();
-      await db.journalSessions.delete(id);
-      // نسخهٔ استراتژیِ مخصوص همین سشن، اگر سشن دیگری از آن استفاده نمی‌کند
-      const stillUsed = await db.journalSessions.where('strategyVersionId').equals(session.strategyVersionId).count();
-      if (stillUsed === 0) await db.strategyVersions.delete(session.strategyVersionId);
-    });
-    // عکس‌های همین سشن از کتابخانهٔ اسکرین‌شات هم پاک شوند (خطا مانع حذف سشن نشود)
-    for (const mediaId of mediaIds) {
-      try { await deleteScreenshotForMedia(mediaId); } catch { /* کتابخانه اختیاری است */ }
-    }
   },
 
   async getBundle(id: string): Promise<JournalSessionBundle | undefined> {

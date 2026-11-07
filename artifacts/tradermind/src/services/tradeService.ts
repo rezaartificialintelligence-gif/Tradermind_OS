@@ -3,10 +3,10 @@ import { isClosed, getNetPnl } from '../lib/tradeHelpers';
 import { strategyService } from './strategyService';
 import { analysisService } from './analysisService';
 import { tradeVersionService, tradeEventService } from './tradeEventService';
-import { accountService } from './accountService';
 import { detectTradingSession } from '../lib/tradeClassification';
 import { isTradingBoxAvailableForAccount } from './tradingBoxService';
 import { computeMetrics } from '../core/metrics/engine';
+import { getJournalSessionTrades } from '../core/repositories/tradeRepository';
 
 const defaultReview = JSON.stringify({ didWell: '', didWrong: '', learned: '', wouldTakeAgain: null, validSetup: null });
 const defaultPostTradeReviewStr = JSON.stringify(defaultPostTradeReview);
@@ -283,7 +283,7 @@ export const tradeService = {
   },
 
   async getStats() {
-    const trades = await db.trades.toArray();
+    const trades = await getJournalSessionTrades();
     const closed = trades.filter(isClosed);
     const m = computeMetrics(closed); // موتور واحد
     return {
@@ -334,31 +334,4 @@ export const tradeService = {
 };
 
 // re-export for backward compat
-// ── بالانس حساب: بعد از هر ثبت/ویرایش/حذف معامله با سود و زیان معاملات هماهنگ می‌شود ──
-// خطای محاسبهٔ بالانس هرگز نباید ذخیرهٔ خود معامله را خراب کند.
-const syncBalance = async (...accountIds: Array<string | null | undefined>) => {
-  for (const accountId of new Set(accountIds)) {
-    try { await accountService.recalculateBalance(accountId); } catch { /* نادیده */ }
-  }
-};
-const baseCreateTrade = tradeService.createTrade.bind(tradeService);
-const baseUpdateTrade = tradeService.updateTrade.bind(tradeService);
-const baseDeleteTrade = tradeService.deleteTrade.bind(tradeService);
-tradeService.createTrade = async (data: Partial<Trade> = {}) => {
-  const created = await baseCreateTrade(data);
-  await syncBalance(created.accountId);
-  return created;
-};
-tradeService.updateTrade = async (id: string, data: Partial<Trade>) => {
-  const before = await db.trades.get(id);
-  const updated = await baseUpdateTrade(id, data);
-  await syncBalance(before?.accountId, updated?.accountId);
-  return updated;
-};
-tradeService.deleteTrade = async (id: string) => {
-  const before = await db.trades.get(id);
-  await baseDeleteTrade(id);
-  await syncBalance(before?.accountId);
-};
-
 export { tradeEventService };

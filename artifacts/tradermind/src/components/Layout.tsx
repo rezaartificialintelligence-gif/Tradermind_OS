@@ -38,13 +38,13 @@ function LayoutContent({ children, isAnalyticsRoute }: LayoutProps & { isAnalyti
       <Sidebar />
       <NavRail />
       <main
-        className="tm-main pt-14 md:pt-0 min-h-[100dvh] flex flex-col"
+        className="tm-main min-w-0 pt-14 md:pt-0 min-h-[100dvh] flex flex-col"
         style={{ paddingBottom: 'calc(56px + env(safe-area-inset-bottom))' }}
       >
         <div className="hidden md:block tm-header-slot">
           <AppHeader />
         </div>
-        <div className="tradermind-page-shell flex-1 p-4 md:px-6 md:py-5 max-w-[96rem] mx-auto w-full space-y-4">
+        <div className="tradermind-page-shell min-w-0 flex-1 p-4 md:px-6 md:py-5 max-w-[96rem] mx-auto w-full space-y-4">
           {isAnalyticsRoute && <AccountAnalyticsSelector />}
           {isAnalyticsRoute && !separateView && <SelectedAccountSummary />}
           {isAnalyticsRoute && separateView

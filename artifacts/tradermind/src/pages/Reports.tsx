@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { Skeleton } from "../components/ui/skeleton";
-import { tradeService } from "../services/tradeService";
+import { getJournalSessionTrades } from "../core/repositories/tradeRepository";
 import { journalService } from "../services/journalService";
 import { db } from "../db/database";
 import { useAccountAnalyticsScope } from "../contexts/AccountAnalyticsContext";
@@ -175,7 +175,7 @@ export default function Reports() {
 
   useEffect(() => {
     Promise.all([
-      tradeService.getAllTrades(),
+      getJournalSessionTrades(),
       journalService.getAllJournals(),
       db.strategies.toArray(),
     ]).then(([tr, jn, st]) => {

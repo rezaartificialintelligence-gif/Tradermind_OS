@@ -8,10 +8,10 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../co
 import { Button } from '../components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { toast } from 'sonner';
-import { db, type Account } from '../db/database';
-import { accountService, riskPercentFromAmount } from '../services/accountService';
+import { db } from '../db/database';
 import type { RiskProfileData, RiskUnit, SessionRule, SetupRule } from '../services/riskService';
 import { VoiceTypingButton } from '../components/ui/VoiceTypingButton';
+import { normalizeDecimalInput, parseDecimalInput } from '../lib/numberInput';
 
 // ─────────────────────────────────────────────────────────────────
 // Helpers
@@ -53,12 +53,49 @@ function NumField({ value, onChange, placeholder, suffix }: {
   return (
     <div className="flex items-center gap-2">
       <input
-        type="number" inputMode="decimal" value={value} onChange={e => onChange(e.target.value)}
+        type="text" inputMode="decimal" dir="ltr" value={value}
+        onChange={e => onChange(normalizeDecimalInput(e.target.value))}
+        autoComplete="off"
         placeholder={placeholder ?? '—'}
         className="w-28 h-9 rounded-lg border border-border bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
       />
       {suffix && <span className="text-sm text-muted-foreground">{suffix}</span>}
     </div>
+  );
+}
+
+function RuleRiskField({ value, onChange, className }: {
+  value: number;
+  onChange: (value: number) => void;
+  className: string;
+}) {
+  const [draft, setDraft] = useState(String(value));
+
+  useEffect(() => {
+    setDraft(String(value));
+  }, [value]);
+
+  const commit = () => {
+    const parsed = parseDecimalInput(draft);
+    if (parsed == null) {
+      setDraft(String(value));
+      return;
+    }
+    onChange(parsed);
+    setDraft(String(parsed));
+  };
+
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      dir="ltr"
+      value={draft}
+      onChange={event => setDraft(normalizeDecimalInput(event.target.value))}
+      onBlur={commit}
+      autoComplete="off"
+      className={className}
+    />
   );
 }
 
@@ -86,28 +123,6 @@ export default function RiskProfile() {
   const [equity, setEquity] = useState('');
   const [currency, setCurrency] = useState('USD');
   const [riskUnit, setRiskUnit] = useState<RiskUnit>('percentage');
-  const [accounts, setAccounts] = useState<Account[]>([]);
-  const [accountId, setAccountId] = useState('');
-  const [dollarRisk, setDollarRisk] = useState('');
-
-  useEffect(() => {
-    accountService.getActive().then(list => setAccounts(list)).catch(() => setAccounts([]));
-  }, []);
-
-  const selectAccount = async (id: string) => {
-    setAccountId(id);
-    const account = accounts.find(item => item.id === id);
-    if (!account) return;
-    const live = await accountService.getLiveBalance(id);
-    const current = live ?? account.currentBalance ?? account.initialBalance;
-    if (current != null) { setBalance(String(current)); setEquity(String(current)); }
-    setCurrency(account.currency);
-  };
-
-  const dollarRiskPct = riskPercentFromAmount(
-    dollarRisk.trim() === '' ? null : parseFloat(dollarRisk),
-    balance.trim() === '' ? null : parseFloat(balance),
-  );
 
   useEffect(() => {
     db.table('riskProfiles').get('default').then((p: RiskProfileData | undefined) => {
@@ -132,7 +147,7 @@ export default function RiskProfile() {
     });
   }, []);
 
-  const n = (v: string) => (v.trim() === '' ? null : parseFloat(v));
+  const n = parseDecimalInput;
 
   const handleSave = async () => {
     setSaving(true);
@@ -193,24 +208,6 @@ export default function RiskProfile() {
           <CardDescription>موجودی و واحد ریسک مورد استفاده</CardDescription>
         </CardHeader>
         <CardContent>
-          <FieldRow label="حساب" hint="با انتخاب حساب، موجودی از معاملات ثبت‌شده محاسبه می‌شود">
-            <Select value={accountId} onValueChange={v => void selectAccount(v)}>
-              <SelectTrigger className="w-44 h-9" data-testid="select-risk-account"><SelectValue placeholder="انتخاب حساب" /></SelectTrigger>
-              <SelectContent>
-                {accounts.map(account => (
-                  <SelectItem key={account.id} value={account.id}>{account.name}{account.accountNumber ? ` · ${account.accountNumber}` : ''}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </FieldRow>
-          {(() => {
-            const account = accounts.find(item => item.id === accountId);
-            return account ? (
-              <p className="mb-2 text-xs text-muted-foreground" data-testid="text-risk-account-info">
-                موجودی اولیه: {account.initialBalance?.toLocaleString() ?? '—'} · موجودی فعلی: {account.currentBalance?.toLocaleString() ?? '—'}{account.accountNumber ? ` · شمارهٔ حساب: ${account.accountNumber}` : ''}
-              </p>
-            ) : null;
-          })()}
           <FieldRow label="موجودی حساب" hint="آخرین موجودی ثبت‌شده">
             <NumField value={balance} onChange={setBalance} suffix={currency} />
           </FieldRow>
@@ -249,15 +246,6 @@ export default function RiskProfile() {
         <CardContent>
           <FieldRow label="ریسک پیش‌فرض هر معامله" hint="مقدار معمول ریسک شما">
             <NumField value={defaultRisk} onChange={setDefaultRisk} placeholder="مثلاً 1" suffix="%" />
-          </FieldRow>
-          <FieldRow label="ریسک دلاری" hint="مبلغ را وارد کنید؛ درصد نسبت به موجودی حساب خودکار حساب می‌شود">
-            <div className="flex flex-wrap items-center gap-2">
-              <NumField value={dollarRisk} onChange={setDollarRisk} placeholder="مثلاً 50" suffix={currency} />
-              {dollarRiskPct !== null && <>
-                <span className="text-sm font-medium" data-testid="text-dollar-risk-pct">≈ {dollarRiskPct}٪</span>
-                <Button type="button" size="sm" variant="outline" onClick={() => setDefaultRisk(String(dollarRiskPct))} data-testid="button-apply-dollar-risk">اعمال به ریسک پیش‌فرض</Button>
-              </>}
-            </div>
           </FieldRow>
           <FieldRow label="حداکثر ریسک هر معامله" hint="بالاتر = نقض قانون">
             <NumField value={maxRisk} onChange={setMaxRisk} placeholder="مثلاً 2" suffix="%" />
@@ -311,8 +299,8 @@ export default function RiskProfile() {
                     ))}
                   </SelectContent>
                 </Select>
-                <input type="number" value={r.maxRiskPct} onChange={e => {
-                  const u = [...sessionRules]; u[i] = { ...u[i], maxRiskPct: parseFloat(e.target.value) }; setSessionRules(u);
+                <RuleRiskField value={r.maxRiskPct} onChange={value => {
+                  const u = [...sessionRules]; u[i] = { ...u[i], maxRiskPct: value }; setSessionRules(u);
                 }} className="w-20 h-9 rounded-lg border border-border bg-background px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring" />
                 <span className="text-sm text-muted-foreground">%</span>
                 <button onClick={() => setSessionRules(prev => prev.filter((_, j) => j !== i))}
@@ -347,8 +335,8 @@ export default function RiskProfile() {
                   }} placeholder="نام ستاپ (مثلاً OB)" dir="ltr"
                     className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring" />
                 </div>
-                <input type="number" value={r.maxRiskPct} onChange={e => {
-                  const u = [...setupRules]; u[i] = { ...u[i], maxRiskPct: parseFloat(e.target.value) }; setSetupRules(u);
+                <RuleRiskField value={r.maxRiskPct} onChange={value => {
+                  const u = [...setupRules]; u[i] = { ...u[i], maxRiskPct: value }; setSetupRules(u);
                 }} className="w-20 h-9 rounded-lg border border-border bg-background px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring" />
                 <span className="text-sm text-muted-foreground">%</span>
                 <button onClick={() => setSetupRules(prev => prev.filter((_, j) => j !== i))}

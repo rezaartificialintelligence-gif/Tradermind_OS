@@ -4,9 +4,10 @@
  * هیچ تغییری در دیتابیس نمی‌دهد — فقط read-only است
  */
 import { db } from '../db/database';
-import { isWin, isLoss } from '../lib/tradeHelpers';
+import { BEHAVIOR_FLAG_LABELS, getBehaviorFlags, isWin, isLoss } from '../lib/tradeHelpers';
 import { getTradingDateParts } from '../lib/tradingTime';
 import { computeMetrics, getMetricExtremesBy, getR, mean, rateFromCounts } from '../core/metrics/engine';
+import { getJournalSessionTrades } from '../core/repositories/tradeRepository';
 
 export type InsightSeverity = 'critical' | 'warning' | 'positive' | 'info';
 
@@ -29,6 +30,8 @@ const SESSION_NAMES: Record<string, string> = {
 const NEGATIVE_EMOTIONS = new Set([
   'FOMO', 'Fearful', 'Anxious', 'Frustrated',
   'Revenge Trading', 'Overconfident', 'Tired', 'Distracted',
+  'ترس', 'ترس از دست دادن', 'بی‌صبری', 'اعتماد بیش‌ازحد',
+  'معاملهٔ انتقامی', 'تردید', 'عدم اطمینان',
 ]);
 
 function winRate(wins: number, total: number) {
@@ -41,7 +44,7 @@ function lossRate(losses: number, total: number) {
 
 export const insightsService = {
   async generateAutoInsights(accountId: string | null = null): Promise<AutoInsight[]> {
-    const loadedTrades = await db.trades.where('status').equals('closed').toArray();
+    const loadedTrades = (await getJournalSessionTrades()).filter(trade => trade.status === 'closed');
     const allTrades = accountId ? loadedTrades.filter(trade => trade.accountId === accountId) : [];
     if (allTrades.length < 3) return [];
 
@@ -167,14 +170,15 @@ export const insightsService = {
     // ── ۴. تحلیل احساسات ────────────────────────────────────────────
     const emotionMap: Record<string, { wins: number; losses: number }> = {};
     allTrades.forEach(t => {
+      const emotions = new Set<string>(getBehaviorFlags(t).map(flag => BEHAVIOR_FLAG_LABELS[flag]));
       try {
-        const emotions = JSON.parse(t.emotions) as string[];
-        emotions.forEach(e => {
-          if (!emotionMap[e]) emotionMap[e] = { wins: 0, losses: 0 };
-          if (t.result === 'win' || t.result === 'partial-win') emotionMap[e].wins++;
-          if (t.result === 'loss' || t.result === 'partial-loss') emotionMap[e].losses++;
-        });
+        (JSON.parse(t.emotions) as string[]).forEach(emotion => emotions.add(emotion));
       } catch { /* ignore */ }
+      emotions.forEach(emotion => {
+        if (!emotionMap[emotion]) emotionMap[emotion] = { wins: 0, losses: 0 };
+        if (t.result === 'win' || t.result === 'partial-win') emotionMap[emotion].wins++;
+        if (t.result === 'loss' || t.result === 'partial-loss') emotionMap[emotion].losses++;
+      });
     });
 
     // بدترین احساس منفی

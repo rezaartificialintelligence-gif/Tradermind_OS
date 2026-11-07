@@ -4,6 +4,7 @@ import { ArrowUpLeft, CalendarDays, CircleAlert, Layers3, Pin, PinOff, Plus, Sea
 import { toast } from 'sonner';
 import { accountService } from '../services/accountService';
 import { journalSessionService, parseJournalArray } from '../services/journalSessionService';
+import { tradeService } from '../services/tradeService';
 import { strategyService } from '../services/strategyService';
 import {
   getJournalSessionDefaults,
@@ -12,8 +13,9 @@ import {
   type JournalSessionDefaults,
 } from '../services/journalSessionDefaults';
 import { describeSessionMoment, detectSessionKind, findSessionTypeOptionId, formatDualDateTime, sessionKindLabel } from '../lib/sessionDateTime';
+import { getNetPnl } from '../lib/tradeHelpers';
 import { isTradingBoxAvailableForAccount, tradingBoxService } from '../services/tradingBoxService';
-import type { Account, JournalOption, JournalSession, Strategy, TradingBox } from '../db/database';
+import type { Account, JournalOption, JournalSession, Strategy, Trade, TradingBox } from '../db/database';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
@@ -40,6 +42,19 @@ type SessionForm = {
   tags: string;
   preTradePsychologyOptionIds: string[];
 };
+type LegacyTradeGroup = {
+  key: string;
+  dateLabel: string;
+  accountId: string | null;
+  boxId: string | null;
+  trades: Trade[];
+};
+
+function localTradingDayKey(timestamp: number): string {
+  const date = new Date(timestamp);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
 const freshForm = (): SessionForm => ({
   accountId: '', tradingBoxId: '', strategyId: '', startTime: dateTimeLocal(new Date()),
   symbol: '', marketOptionId: 'none', sessionTypeOptionId: 'auto', notes: '', tags: '',
@@ -74,9 +89,15 @@ function DefaultPin({ pinned, disabled, onToggle, testId }: { pinned: boolean; d
   );
 }
 
+export function navigateToNewSessionDetail(sessionId: string, navigate: (path: string) => void): void {
+  navigate(`/journal/sessions/${encodeURIComponent(sessionId)}`);
+  window.scrollTo(0, 0);
+}
+
 export default function JournalSessions() {
-  const [, setLocation] = useLocation();
+  const [location, setLocation] = useLocation();
   const [sessions, setSessions] = useState<JournalSession[]>([]);
+  const [trades, setTrades] = useState<Trade[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [boxes, setBoxes] = useState<TradingBox[]>([]);
   const [strategies, setStrategies] = useState<Strategy[]>([]);
@@ -93,11 +114,12 @@ export default function JournalSessions() {
     setError('');
     try {
       await journalSessionService.ensureDefaultOptions();
-      const [sessionRows, accountRows, boxRows, strategyRows, optionRows, hiddenCategoryIds] = await Promise.all([
+      const [sessionRows, accountRows, boxRows, tradeRows, strategyRows, optionRows, hiddenCategoryIds] = await Promise.all([
         journalSessionService.getSessions(), accountService.getAll(), tradingBoxService.getAll(),
-        strategyService.getAllStrategies(), journalSessionService.getOptions(), journalSessionService.getHiddenCategoryIds(),
+        tradeService.getAllTrades(), strategyService.getAllStrategies(), journalSessionService.getOptions(), journalSessionService.getHiddenCategoryIds(),
       ]);
       setSessions(sessionRows);
+      setTrades(tradeRows);
       setAccounts(accountRows.filter(account => !account.isArchived));
       setBoxes(boxRows.filter(box => box.status === 'active'));
       setStrategies(strategyRows);
@@ -126,9 +148,37 @@ export default function JournalSessions() {
   const accountById = useMemo(() => new Map(accounts.map(item => [item.id, item])), [accounts]);
   const boxById = useMemo(() => new Map(boxes.map(item => [item.id, item])), [boxes]);
   const strategyById = useMemo(() => new Map(strategies.map(item => [item.id, item])), [strategies]);
+  const tradeCountBySession = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const trade of trades) {
+      if (trade.journalSessionId) {
+        counts.set(trade.journalSessionId, (counts.get(trade.journalSessionId) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [trades]);
   const sessionTypes = options.filter(item => item.category === 'session_type' && item.enabled);
   const marketOptions = options.filter(item => item.category === 'market' && item.enabled);
   const psychologyOptions = options.filter(item => item.category === 'psychology' && item.enabled);
+  const routeQuery = location.includes('?')
+    ? location.slice(location.indexOf('?') + 1)
+    : (() => {
+      const hash = typeof window !== 'undefined' ? window.location.hash.replace(/^#/, '') : '';
+      const hashQueryIndex = hash.indexOf('?');
+      const hashQuery = hashQueryIndex >= 0 ? hash.slice(hashQueryIndex + 1) : '';
+      const browserQuery = typeof window !== 'undefined' ? window.location.search.replace(/^\?/, '') : '';
+      return hashQuery || browserQuery;
+    })();
+  const routeFilters = new URLSearchParams(routeQuery);
+  const rawAccountFilterId = routeFilters.get('accountId') ?? '';
+  const rawBoxFilterId = routeFilters.get('boxId') ?? '';
+  const accountFilterId = rawAccountFilterId === 'all' ? '' : rawAccountFilterId;
+  const boxFilterId = rawBoxFilterId === 'all' ? '' : rawBoxFilterId;
+  const returnParams = new URLSearchParams();
+  if (accountFilterId) returnParams.set('accountId', accountFilterId);
+  if (boxFilterId) returnParams.set('boxId', boxFilterId);
+  const returnQuery = returnParams.toString();
+  const sessionListReturnTo = `/journal/sessions${returnQuery ? `?${returnQuery}` : ''}`;
   const startTimestamp = form.startTime ? new Date(form.startTime).getTime() : Number.NaN;
   const startMoment = describeSessionMoment(startTimestamp);
   const detectedKind = Number.isFinite(startTimestamp) ? detectSessionKind(startTimestamp) : null;
@@ -148,13 +198,50 @@ export default function JournalSessions() {
     const value = form[key];
     return Boolean(value) && defaults[key] === (key === 'symbol' ? value.trim().toUpperCase() : value);
   };
-  const filteredSessions = sessions.filter(session => {
+  const filteredSessions = [...sessions].sort((a, b) => b.startTime - a.startTime).filter(session => {
+    if (accountFilterId && session.accountId !== accountFilterId) return false;
+    if (boxFilterId && session.tradingBoxId !== boxFilterId) return false;
     const haystack = [
       ...parseJournalArray(session.symbols), accountById.get(session.accountId)?.name,
       boxById.get(session.tradingBoxId)?.name, strategyById.get(session.strategyId)?.name,
     ].join(' ').toLocaleLowerCase();
     return haystack.includes(query.toLocaleLowerCase().trim());
   });
+  const legacyTradeGroups = useMemo(() => {
+    const knownSessionIds = new Set(sessions.map(session => session.id));
+    const groups = new Map<string, LegacyTradeGroup>();
+    const normalizedQuery = query.toLocaleLowerCase().trim();
+    for (const trade of trades) {
+      if (trade.journalSessionId && knownSessionIds.has(trade.journalSessionId)) continue;
+      if (accountFilterId && trade.accountId !== accountFilterId) continue;
+      if (boxFilterId && trade.boxId !== boxFilterId) continue;
+      const haystack = [
+        trade.symbol,
+        accountById.get(trade.accountId ?? '')?.name,
+        boxById.get(trade.boxId ?? '')?.name,
+        strategyById.get(trade.strategyId ?? '')?.name,
+      ].join(' ').toLocaleLowerCase();
+      if (normalizedQuery && !haystack.includes(normalizedQuery)) continue;
+
+      const dayKey = localTradingDayKey(trade.openedAt);
+      const key = `${dayKey}|${trade.accountId ?? ''}|${trade.boxId ?? ''}`;
+      let group = groups.get(key);
+      if (!group) {
+        group = {
+          key,
+          dateLabel: new Intl.DateTimeFormat('fa-IR', { dateStyle: 'full' }).format(trade.openedAt),
+          accountId: trade.accountId,
+          boxId: trade.boxId,
+          trades: [],
+        };
+        groups.set(key, group);
+      }
+      group.trades.push(trade);
+    }
+    return [...groups.values()]
+      .map(group => ({ ...group, trades: group.trades.sort((a, b) => b.openedAt - a.openedAt) }))
+      .sort((a, b) => localTradingDayKey(b.trades[0]?.openedAt ?? 0).localeCompare(localTradingDayKey(a.trades[0]?.openedAt ?? 0)));
+  }, [trades, sessions, accountFilterId, boxFilterId, query, accountById, boxById, strategyById]);
 
   const handleCreate = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -180,7 +267,7 @@ export default function JournalSessions() {
         preTradePsychologyOptionIds: form.preTradePsychologyOptionIds,
       });
       toast.success('سشن ثبت شد.');
-      setLocation(`/journal/sessions/${session.id}`);
+      navigateToNewSessionDetail(session.id, setLocation);
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : 'ثبت سشن انجام نشد.');
     } finally {
@@ -194,7 +281,7 @@ export default function JournalSessions() {
   </main>;
 
   return (
-    <main dir="rtl" className="tradermind-page-shell tm-session-page mx-auto w-full max-w-6xl space-y-6 p-4 pb-12 md:p-8" data-testid="page-journal-sessions">
+    <main dir="rtl" className="tradermind-page-shell mx-auto w-full max-w-6xl space-y-6 p-4 pb-12 md:p-8" data-testid="page-journal-sessions">
       <header className="flex flex-col justify-between gap-4 border-b border-border/70 pb-5 sm:flex-row sm:items-end">
         <div>
           <div className="mb-2 flex items-center gap-2 text-xs font-medium tracking-wide text-primary">
@@ -208,12 +295,21 @@ export default function JournalSessions() {
         </div>
       </header>
 
+      {(accountFilterId || boxFilterId) && <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/20 bg-primary/[0.04] px-3 py-2 text-sm" data-testid="status-session-list-filter">
+        <span className="text-muted-foreground">
+          {accountFilterId && <>فیلتر حساب: <strong className="text-foreground">{accountById.get(accountFilterId)?.name ?? 'حساب انتخاب‌شده'}</strong></>}
+          {accountFilterId && boxFilterId && <span className="mx-2">·</span>}
+          {boxFilterId && <>فیلتر باکس: <strong className="text-foreground">{boxById.get(boxFilterId)?.name ?? 'باکس انتخاب‌شده'}</strong></>}
+        </span>
+        <Button variant="ghost" size="sm" onClick={() => setLocation('/journal/sessions')} data-testid="button-clear-session-filter">نمایش همهٔ سشن‌ها</Button>
+      </div>}
+
       {error && <Card className="border-destructive/40 bg-destructive/5" data-testid="status-sessions-error"><CardContent className="flex items-center justify-between gap-3 p-4 text-sm">
         <span className="flex items-center gap-2"><CircleAlert className="h-4 w-4 text-destructive" />{error}</span>
         <Button variant="outline" size="sm" onClick={() => void load()} data-testid="button-retry-sessions">تلاش دوباره</Button>
       </CardContent></Card>}
 
-      <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1.45fr)]">
+      <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1.45fr)]">
         <Card className="tradermind-card overflow-hidden">
           <div className="border-b border-border/70 bg-primary/[0.035] px-5 py-4">
             <div className="flex items-center gap-2"><span className="grid h-8 w-8 place-items-center rounded-lg bg-primary/10 text-primary"><Plus className="h-4 w-4" /></span>
@@ -310,15 +406,15 @@ export default function JournalSessions() {
             <div><h2 className="text-lg font-semibold">سوابق اخیر</h2><p className="text-xs text-muted-foreground">برای بازبینی جزئیات، یک سشن را انتخاب کنید.</p></div>
             <div className="relative w-full sm:max-w-[15rem]"><Search className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input aria-label="جست‌وجوی سشن" placeholder="جست‌وجو در سوابق" value={query} onChange={event => setQuery(event.target.value)} className="pr-9" data-testid="input-search-sessions" /></div>
           </div>
-          {sessions.length === 0 ? <Card className="border-dashed bg-card/50" data-testid="empty-session-list"><CardContent className="flex min-h-60 flex-col items-center justify-center px-6 text-center">
+          {sessions.length === 0 && legacyTradeGroups.length === 0 ? <Card className="border-dashed bg-card/50" data-testid="empty-session-list"><CardContent className="flex min-h-60 flex-col items-center justify-center px-6 text-center">
             <div className="mb-4 grid h-12 w-12 place-items-center rounded-xl bg-primary/10 text-primary"><Target className="h-6 w-6" /></div>
             <h3 className="font-semibold">هنوز سشنی ثبت نشده</h3><p className="mt-1 max-w-sm text-sm leading-6 text-muted-foreground">با ثبت زمینهٔ بازار پیش از معامله، مرور نتیجه‌ها دقیق‌تر و منصفانه‌تر می‌شود.</p>
-          </CardContent></Card> : filteredSessions.length === 0 ? <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground" data-testid="empty-session-search">موردی با این عبارت پیدا نشد.</div> : (
+          </CardContent></Card> : filteredSessions.length === 0 && legacyTradeGroups.length === 0 ? <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground" data-testid="empty-session-search">موردی با این جست‌وجو یا فیلتر پیدا نشد.</div> : (
             <div className="space-y-3">
               {filteredSessions.map((session, index) => {
                 const symbols = parseJournalArray(session.symbols);
                 const status = session.status === 'active' ? 'در جریان' : session.status === 'completed' ? 'تکمیل‌شده' : 'لغوشده';
-                return <button key={session.id} type="button" onClick={() => setLocation(`/journal/sessions/${session.id}`)} className="group w-full text-right" data-testid={`card-session-${session.id}`}>
+                return <button key={session.id} type="button" onClick={() => setLocation(`/journal/sessions/${session.id}?returnTo=${encodeURIComponent(sessionListReturnTo)}`)} className="group w-full text-right" data-testid={`card-session-${session.id}`}>
                   <Card className="tradermind-card overflow-hidden transition-all group-hover:-translate-y-0.5">
                     <CardContent className="flex items-start justify-between gap-4 p-4 sm:p-5">
                       <div className="min-w-0 flex-1">
@@ -331,6 +427,7 @@ export default function JournalSessions() {
                         <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
                           <span className="inline-flex items-center gap-1"><Target className="h-3.5 w-3.5" />{strategyById.get(session.strategyId)?.name ?? 'استراتژی حذف‌شده'}</span>
                           <span className="inline-flex items-center gap-1"><CalendarDays className="h-3.5 w-3.5" />{formatDualDateTime(session.startTime)}</span>
+                          <Badge variant="outline" className="text-[10px]" data-testid={`text-session-trade-count-${session.id}`}>{tradeCountBySession.get(session.id) ?? 0} معامله</Badge>
                         </div>
                       </div>
                       <span className="mt-1 grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-border/70 text-muted-foreground transition group-hover:border-primary/40 group-hover:text-primary"><ArrowUpLeft className="h-4 w-4" /></span>
@@ -338,6 +435,50 @@ export default function JournalSessions() {
                   </Card>
                 </button>;
               })}
+              {legacyTradeGroups.length > 0 && <section className="space-y-3 pt-3" aria-label="سوابق قدیمی بدون سشن">
+                <div>
+                  <h3 className="font-semibold">سوابق قدیمی بدون سشن</h3>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">معاملات قدیمی به‌صورت خودکار به سشن تازه وصل نمی‌شوند؛ فقط برای نمایش، بر اساس روز و حساب کنار هم قرار گرفته‌اند.</p>
+                </div>
+                {legacyTradeGroups.map(group => (
+                  <details key={group.key} className="overflow-hidden rounded-xl border border-border/70 bg-card/70" data-testid={`card-legacy-session-${group.key}`}>
+                    <summary className="flex cursor-pointer list-none items-center justify-between gap-3 p-4 transition-colors hover:bg-muted/30">
+                      <span className="min-w-0">
+                        <span className="block font-semibold">{group.dateLabel}</span>
+                        <span className="mt-1 block text-xs text-muted-foreground">
+                          {accountById.get(group.accountId ?? '')?.name ?? 'حساب در دسترس نیست'}
+                          <span className="mx-2">·</span>
+                          {boxById.get(group.boxId ?? '')?.name ?? 'باکس ثبت‌نشده'}
+                        </span>
+                      </span>
+                      <Badge variant="outline">{group.trades.length} معامله</Badge>
+                    </summary>
+                    <div className="divide-y divide-border/70 border-t border-border/70">
+                      {group.trades.map(trade => {
+                        const pnl = getNetPnl(trade);
+                        return <button
+                          key={trade.id}
+                          type="button"
+                          onClick={() => setLocation(`/journal/trades/${trade.id}?returnTo=${encodeURIComponent(sessionListReturnTo)}`)}
+                          className="flex w-full items-center justify-between gap-3 px-4 py-3 text-right transition-colors hover:bg-muted/30"
+                          data-testid={`link-legacy-trade-${trade.id}`}
+                        >
+                          <span className="min-w-0">
+                            <span className="flex flex-wrap items-center gap-2 font-medium">
+                              <span dir="ltr">{trade.symbol || 'نماد ثبت‌نشده'}</span>
+                              <Badge variant="outline" className="text-[10px]">{trade.direction === 'long' ? 'خرید' : 'فروش'}</Badge>
+                            </span>
+                            <span className="mt-1 block text-xs text-muted-foreground">{formatDualDateTime(trade.openedAt)}</span>
+                          </span>
+                          <span className={`shrink-0 text-left text-sm font-medium ${pnl == null ? 'text-muted-foreground' : pnl >= 0 ? 'text-emerald-700 dark:text-emerald-300' : 'text-rose-700 dark:text-rose-300'}`}>
+                            {pnl == null ? '—' : new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 2 }).format(pnl)}
+                          </span>
+                        </button>;
+                      })}
+                    </div>
+                  </details>
+                ))}
+              </section>}
             </div>
           )}
         </section>

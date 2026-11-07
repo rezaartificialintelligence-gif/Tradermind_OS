@@ -8,11 +8,12 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../co
 import { Button } from '../components/ui/button';
 import { toast } from 'sonner';
 import { db } from '../db/database';
+import { getJournalSessionTrades } from '../core/repositories/tradeRepository';
 import { useAccountAnalyticsSettings } from '../contexts/AccountAnalyticsContext';
 import { getTradingDateKey } from '../lib/tradingTime';
-import { computeMetrics } from '../core/metrics/engine';
 import { calculatePreTradeRisk, getPreTradeBriefing } from '../services/riskService';
 import type { RiskProfileData } from '../services/riskService';
+import { normalizeDecimalInput, parseDecimalInput } from '../lib/numberInput';
 
 // ─────────────────────────────────────────────────────────────────
 // Helper
@@ -24,7 +25,9 @@ function NumInput({ label, value, onChange, placeholder = '0', hint }: {
     <div className="space-y-1.5">
       <label className="text-sm font-medium text-foreground/90">{label}</label>
       <input
-        type="number" inputMode="decimal" value={value} onChange={e => onChange(e.target.value)}
+        type="text" inputMode="decimal" dir="ltr" value={value}
+        onChange={e => onChange(normalizeDecimalInput(e.target.value))}
+        autoComplete="off"
         placeholder={placeholder}
         className="w-full h-10 rounded-xl border border-border bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 transition"
       />
@@ -72,14 +75,12 @@ export default function RiskPlanner() {
       }
     });
     // Pre-trade briefing
-    db.trades.toArray().then(allTrades => {
+    getJournalSessionTrades().then(allTrades => {
       const trades = selectedAccountId
         ? allTrades.filter(trade => trade.accountId === selectedAccountId)
         : [];
       db.table('riskProfiles').get('default').then((p: RiskProfileData | undefined) => {
-        const currentBalance = selectedAccount?.initialBalance == null
-          ? null
-          : selectedAccount.initialBalance + computeMetrics(trades).netPnl;
+        const currentBalance = selectedAccount?.currentBalance ?? null;
         const accountProfile = p
           ? { ...p, accountEquity: currentBalance, accountBalance: currentBalance }
           : null;
@@ -91,12 +92,12 @@ export default function RiskPlanner() {
   }, [selectedAccount, selectedAccountId]);
 
   const calc = calculatePreTradeRisk({
-    accountEquity: equity ? parseFloat(equity) : null,
-    entryPrice: entry ? parseFloat(entry) : null,
-    stopLoss: sl ? parseFloat(sl) : null,
-    takeProfit: tp ? parseFloat(tp) : null,
-    riskPct: riskPct ? parseFloat(riskPct) : null,
-    riskAmount: riskAmt ? parseFloat(riskAmt) : null,
+    accountEquity: parseDecimalInput(equity),
+    entryPrice: parseDecimalInput(entry),
+    stopLoss: parseDecimalInput(sl),
+    takeProfit: parseDecimalInput(tp),
+    riskPct: parseDecimalInput(riskPct),
+    riskAmount: parseDecimalInput(riskAmt),
     positionSize: null,
   });
 
@@ -106,16 +107,17 @@ export default function RiskPlanner() {
     : '';
 
   const handleSaveToProfile = async () => {
-    if (equity && parseFloat(equity) > 0) {
+    const parsedEquity = parseDecimalInput(equity);
+    if (parsedEquity != null && parsedEquity > 0) {
       const existing: RiskProfileData | undefined = await db.table('riskProfiles').get('default');
       if (existing) {
-        await db.table('riskProfiles').update('default', { accountEquity: parseFloat(equity), updatedAt: Date.now() });
+        await db.table('riskProfiles').update('default', { accountEquity: parsedEquity, updatedAt: Date.now() });
       } else {
         const def: RiskProfileData = {
-          id: 'default', defaultRiskPct: riskPct ? parseFloat(riskPct) : null,
+          id: 'default', defaultRiskPct: parseDecimalInput(riskPct),
           maxRiskPct: null, maxDailyRiskPct: null, maxWeeklyRiskPct: null, maxTradesPerDay: null,
           maxConsecutiveLosses: null, maxDrawdownPct: null, minRR: null,
-          accountBalance: null, accountEquity: parseFloat(equity),
+          accountBalance: null, accountEquity: parsedEquity,
           currency: 'USD', riskUnit: 'percentage', sessionRules: null, setupRules: null, updatedAt: Date.now(),
         };
         await db.table('riskProfiles').put(def);

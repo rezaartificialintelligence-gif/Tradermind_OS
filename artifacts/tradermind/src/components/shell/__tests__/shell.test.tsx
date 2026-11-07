@@ -20,9 +20,14 @@ describe('shell navigation', () => {
     for (const g of NAV_GROUPS) for (const i of g.items) expect(routePaths).toContain(i.href);
   });
   it('rail highlights the right item for nested routes', () => {
-    const journal = RAIL_ITEMS.find((i) => i.href === '/journal/trades')!;
+    const journal = RAIL_ITEMS.find((i) => i.href === '/journal/sessions')!;
     expect(isRailItemActive(journal, '/journal/daily/2026-10-01')).toBe(true);
-    expect(isRailItemActive(RAIL_ITEMS[0], '/journal/trades')).toBe(false);
+    expect(isRailItemActive(RAIL_ITEMS[0], '/journal/sessions')).toBe(false);
+  });
+  it('uses session browsing as the only journal list and keeps the old trade URL as an alias', () => {
+    expect(NAV_GROUPS.flatMap((group) => group.items).some((item) => item.href === '/journal/trades')).toBe(false);
+    expect(routePaths).toContain('/journal/trades');
+    expect(routePaths).toContain('/journal/sessions');
   });
   it('rail renders all primary items and marks current page', () => {
     const { hook } = memoryLocation({ path: '/risk/planner' });

@@ -105,9 +105,9 @@ export default function DataQuality() {
               <BarChart2 className="w-8 h-8 text-muted-foreground" />
             </div>
             <h2 className="text-xl font-semibold">هیچ معامله‌ای یافت نشد</h2>
-            <p className="text-muted-foreground">ابتدا چند معامله ثبت کنید تا کیفیت داده قابل سنجش باشد.</p>
-            <Button onClick={() => setLocation('/journal/trades/new')}>
-              <TrendingUp className="w-4 h-4 ml-2" /> ثبت اولین معامله
+            <p className="text-muted-foreground">برای ساخت گزارش کیفیت، معامله‌ها را از داخل سشن‌های معاملاتی ثبت کنید.</p>
+            <Button onClick={() => setLocation('/journal/sessions')}>
+              <TrendingUp className="w-4 h-4 ml-2" /> رفتن به سشن‌های معاملاتی
             </Button>
           </CardContent>
         </Card>

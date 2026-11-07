@@ -26,6 +26,7 @@ import {
 import { getByDay, getByHour, getBySession, getOvertradingAnalysis } from '../services/performanceService';
 import { useAppStore } from '../store/useAppStore';
 import { db, DailyJournal } from '../db/database';
+import { getJournalSessionTrades } from '../core/repositories/tradeRepository';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -157,7 +158,7 @@ function MentalPerformanceTab() {
   useEffect(() => {
     (async () => {
       try {
-        const [allTrades, journals] = await Promise.all([db.trades.toArray(), db.dailyJournals.toArray()]);
+        const [allTrades, journals] = await Promise.all([getJournalSessionTrades(), db.dailyJournals.toArray()]);
         const trades = selectedAccountId ? allTrades.filter(trade => trade.accountId === selectedAccountId) : [];
         setData(analyzeMentalPerformance(trades, journals as DailyJournal[]));
       } catch {
@@ -291,7 +292,7 @@ function RecurringMistakesTab() {
   useEffect(() => {
     (async () => {
       try {
-        const allTrades = await db.trades.toArray();
+        const allTrades = await getJournalSessionTrades();
         const trades = selectedAccountId ? allTrades.filter(trade => trade.accountId === selectedAccountId) : [];
         setTrends(analyzeRecurringMistakeTrends(trades));
       } catch {
@@ -439,7 +440,7 @@ function TradingHabitsTab() {
   useEffect(() => {
     (async () => {
       try {
-        const allTrades = await db.trades.toArray();
+        const allTrades = await getJournalSessionTrades();
         const trades = selectedAccountId ? allTrades.filter(trade => trade.accountId === selectedAccountId) : [];
         setByDay(getByDay(trades));
         setByHour(getByHour(trades));
@@ -622,7 +623,7 @@ function SmartReportTab() {
   const generate = useCallback(async () => {
     setLoading(true);
     try {
-      const [allTrades, journals] = await Promise.all([db.trades.toArray(), db.dailyJournals.toArray()]);
+      const [allTrades, journals] = await Promise.all([getJournalSessionTrades(), db.dailyJournals.toArray()]);
       const trades = selectedAccountId ? allTrades.filter(trade => trade.accountId === selectedAccountId) : [];
       const r = generateSmartReport(trades, journals as DailyJournal[]);
       setReport(r);
@@ -756,7 +757,7 @@ function DisciplineScoreTab() {
   useEffect(() => {
     (async () => {
       try {
-        const allTrades = await db.trades.toArray();
+        const allTrades = await getJournalSessionTrades();
         const trades = selectedAccountId ? allTrades.filter(trade => trade.accountId === selectedAccountId) : [];
         setResult(computeDisciplineScore(trades));
       } catch {

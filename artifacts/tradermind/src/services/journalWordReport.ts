@@ -35,15 +35,13 @@ export async function buildJournalWordReport(range: JournalReportRange = {}): Pr
   const inRange = (timestamp: number) =>
     (range.from == null || timestamp >= range.from) && (range.to == null || timestamp <= range.to);
   const sessionIdSet = new Set(sessionIds);
-  // همهٔ معاملات؛ مثل Excel: معاملهٔ وصل‌به‌سشن از روی سشنِ بازه، معاملهٔ بدون سشن از روی زمان ورود
+  // گزارش فقط دادهٔ معاملاتی متصل به سشن‌های همین بازه را شامل می‌شود.
   const allTrades = await db.trades.toArray();
-  const trades = allTrades.filter(trade => (trade.journalSessionId
-    ? sessionIdSet.has(trade.journalSessionId)
-    : inRange(trade.openedAt) && (!accountId || trade.accountId === accountId)));
+  const trades = allTrades.filter(trade =>
+    Boolean(trade.journalSessionId) && sessionIdSet.has(trade.journalSessionId!));
   const tradeIdSet = new Set(trades.map(trade => trade.id));
-  const orphanIds = trades.filter(trade => !trade.journalSessionId).map(trade => trade.id);
 
-  const [options, strategies, accounts, analyses, triggers, allTradeData, sessionMedia, orphanMedia] = await Promise.all([
+  const [options, strategies, accounts, analyses, triggers, allTradeData, sessionMedia, tradeMedia] = await Promise.all([
     db.journalOptions.toArray(),
     db.strategies.toArray(),
     db.accounts.toArray(),
@@ -51,11 +49,13 @@ export async function buildJournalWordReport(range: JournalReportRange = {}): Pr
     db.journalTriggerEvents.where('sessionId').anyOf(sessionIds).toArray(),
     db.journalTradeData.toArray(),
     db.journalMedia.where('sessionId').anyOf(sessionIds).toArray(),
-    db.journalMedia.where('tradeId').anyOf(orphanIds).toArray(),
+    tradeIdSet.size
+      ? db.journalMedia.where('tradeId').anyOf([...tradeIdSet]).toArray()
+      : Promise.resolve([]),
   ]);
 
   const tradeData = allTradeData.filter(item => tradeIdSet.has(item.tradeId));
-  const mediaById = new Map([...sessionMedia, ...orphanMedia].map(record => [record.id, record]));
+  const mediaById = new Map([...sessionMedia, ...tradeMedia].map(record => [record.id, record]));
   const mediaRecords = [...mediaById.values()];
 
   // عکس‌ها یکی‌یکی به JPEG تبدیل می‌شوند (Word از WebP پشتیبانی نمی‌کند) تا حافظهٔ گوشی پر نشود.

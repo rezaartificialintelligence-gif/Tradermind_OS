@@ -42,10 +42,7 @@ const dateParts = (timestamp: number | null | undefined) => {
   return moment ?? { jalali: '', gregorian: '', time: '', weekday: '' };
 };
 
-/**
- * ردیف‌های گزارش Excel (بدون عکس). این فایل گزارش است، نه پشتیبان.
- * همهٔ معاملات بازه را می‌آورد: معاملات سشنی همراه اطلاعات سشن و تریگر، و معاملات قدیمی بدون سشن.
- */
+/** ردیف‌های گزارش Excel؛ فقط معامله‌های متصل به سشن‌های ژورنال. */
 export async function buildJournalExcelSheets(range: JournalReportRange = {}): Promise<{ sheets: ReportSheet[]; tradeCount: number }> {
   const inRange = (timestamp: number) =>
     (range.from == null || timestamp >= range.from) && (range.to == null || timestamp <= range.to);
@@ -69,9 +66,7 @@ export async function buildJournalExcelSheets(range: JournalReportRange = {}): P
   const sessionById = new Map<string, JournalSession>(allSessions.map(session => [session.id, session]));
   const sessionIds = new Set(sessions.map(session => session.id));
   const trades = allTrades
-    .filter(trade => (trade.journalSessionId
-      ? sessionIds.has(trade.journalSessionId)
-      : inRange(trade.openedAt) && (!accountId || trade.accountId === accountId)))
+    .filter(trade => Boolean(trade.journalSessionId) && sessionIds.has(trade.journalSessionId!))
     .sort((a, b) => a.openedAt - b.openedAt);
 
   const optionLabel = new Map(options.map(option => [option.id, option.label]));

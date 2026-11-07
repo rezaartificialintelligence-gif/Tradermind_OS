@@ -12,7 +12,7 @@
  *  - BACKUP_FORMAT_VERSION: فقط با تغییر ساختار فایل پشتیبان افزایش پیدا می‌کند
  */
 
-export const APP_VERSION = '1.5.0';
+export const APP_VERSION = '2.0.0';
 export const DB_VERSION = 25;
 export const BACKUP_FORMAT_VERSION = '3.2';
 /** نسخه Schema برای فایل‌های پشتیبان */

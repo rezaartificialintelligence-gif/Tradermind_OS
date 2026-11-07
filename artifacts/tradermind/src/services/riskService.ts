@@ -1044,7 +1044,7 @@ export function calculatePreTradeRisk(params: {
   riskPct: number | null;
   riskAmount: number | null;
   positionSize: number | null;
-  pointValue?: number; // pip/point value for forex (default 1)
+  pointValue?: number; // ارزش حرکت 1.0 قیمت برای هر واحد حجم؛ مثلاً XAUUSD معمولاً 100
 }): PreTradeRiskCalc {
   const { accountEquity, entryPrice, stopLoss, takeProfit, riskPct, riskAmount } = params;
   const missing: string[] = [];
@@ -1061,6 +1061,10 @@ export function calculatePreTradeRisk(params: {
 
   const slDist = Math.abs(entryPrice! - stopLoss!);
   const slDistPct = (slDist / entryPrice!) * 100;
+  const pointValue = Number.isFinite(params.pointValue) && (params.pointValue ?? 0) > 0
+    ? params.pointValue!
+    : 1;
+  const riskPerVolumeUnit = slDist * pointValue;
 
   let monRisk: number | null = null;
   let pctRisk: number | null = null;
@@ -1069,14 +1073,14 @@ export function calculatePreTradeRisk(params: {
   if (riskAmount !== null) {
     monRisk = riskAmount;
     if (accountEquity) pctRisk = (riskAmount / accountEquity) * 100;
-    if (slDist > 0) posSz = riskAmount / slDist;
+    if (riskPerVolumeUnit > 0) posSz = riskAmount / riskPerVolumeUnit;
   } else if (riskPct !== null && accountEquity) {
     monRisk = (riskPct / 100) * accountEquity;
     pctRisk = riskPct;
-    if (slDist > 0) posSz = monRisk / slDist;
+    if (riskPerVolumeUnit > 0) posSz = monRisk / riskPerVolumeUnit;
   } else if (params.positionSize !== null) {
     posSz = params.positionSize;
-    monRisk = slDist * posSz;
+    monRisk = riskPerVolumeUnit * posSz;
     if (accountEquity) pctRisk = (monRisk / accountEquity) * 100;
   } else {
     missing.push('ریسک مقداری یا درصدی');
@@ -1086,7 +1090,7 @@ export function calculatePreTradeRisk(params: {
   let rr: number | null = null;
   if (takeProfit !== null && entryPrice !== null) {
     const tpDist = Math.abs(takeProfit - entryPrice);
-    potRew = (posSz ?? 1) * tpDist;
+    potRew = (posSz ?? 1) * tpDist * pointValue;
     if (slDist > 0) rr = tpDist / slDist;
   }
 

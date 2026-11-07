@@ -41,6 +41,7 @@ import { VoiceTypingButton } from '../components/ui/VoiceTypingButton';
 import { useStartEquity } from '../hooks/useStartEquity';
 import { getTradingDateKey } from '../lib/tradingTime';
 import { useAccountAnalyticsScope } from '../contexts/AccountAnalyticsContext';
+import { normalizeDecimalInput } from '../lib/numberInput';
 
 // ─────────────────────────────────────────────────────────────────
 // Types
@@ -1106,7 +1107,7 @@ export default function RiskManagement() {
                   </div>
                   <div>
                     <label className="text-xs text-muted-foreground mb-1 block">حداکثر ریسک گروه (%)</label>
-                    <input type="number" value={newGroupMaxRisk} onChange={e => setNewGroupMaxRisk(e.target.value)}
+                    <input type="text" inputMode="decimal" dir="ltr" value={newGroupMaxRisk} onChange={e => setNewGroupMaxRisk(normalizeDecimalInput(e.target.value))}
                       placeholder="۵"
                       className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring" />
                   </div>

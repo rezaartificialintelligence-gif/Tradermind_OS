@@ -60,6 +60,7 @@ export default function RiskPlanner() {
   const [tp, setTp] = useState('');
   const [riskPct, setRiskPct] = useState('');
   const [riskAmt, setRiskAmt] = useState('');
+  const [contractValue, setContractValue] = useState('100');
   const [direction, setDirection] = useState<'long' | 'short'>('long');
 
   // Pre-trade briefing
@@ -99,6 +100,7 @@ export default function RiskPlanner() {
     riskPct: parseDecimalInput(riskPct),
     riskAmount: parseDecimalInput(riskAmt),
     positionSize: null,
+    pointValue: parseDecimalInput(contractValue) ?? 100,
   });
 
   const hasResult = calc.missingFields.length === 0 || (calc.slDistance !== null);
@@ -227,6 +229,8 @@ export default function RiskPlanner() {
             <NumInput label="حد ضرر (Stop Loss)" value={sl} onChange={setSl}
               hint={direction === 'long' ? 'زیر قیمت ورود' : 'بالای قیمت ورود'} />
             <NumInput label="هدف سود (Take Profit)" value={tp} onChange={setTp} hint="اختیاری" />
+            <NumInput label="ضریب قرارداد" value={contractValue} onChange={setContractValue}
+              hint="برای XAUUSD معمولاً 100؛ برای نمادهای دیگر طبق مشخصات بروکر تنظیم کنید." />
             <NumInput label="ریسک (٪ از سرمایه)" value={riskPct} onChange={v => { setRiskPct(v); setRiskAmt(''); }}
               placeholder={profile?.defaultRiskPct ? String(profile.defaultRiskPct) : '1'} />
             <NumInput label="ریسک (مقدار $)" value={riskAmt} onChange={v => { setRiskAmt(v); setRiskPct(''); }}
@@ -276,7 +280,7 @@ export default function RiskPlanner() {
               <MetricCard
                 label="حجم معامله"
                 value={calc.positionSize !== null ? calc.positionSize.toFixed(4) : '—'}
-                sub="واحد / لات"
+                sub="لات یا واحد بر اساس ضریب قرارداد"
               />
               <MetricCard
                 label="سود بالقوه"

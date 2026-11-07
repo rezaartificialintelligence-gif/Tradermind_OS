@@ -28,15 +28,17 @@ import {
   type AnalysisFlexibleFieldKey,
   type JournalAnalysisFieldLabels,
 } from '../services/journalAnalysisFieldLabels';
-import type { JournalMedia, JournalOption, JournalSessionAnalysis, Trade, TradingBox } from '../db/database';
+import type { JournalMedia, JournalOption, JournalSessionAnalysis, JournalSessionEvent, Trade, TradingBox } from '../db/database';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Skeleton } from '../components/ui/skeleton';
 import { Textarea } from '../components/ui/textarea';
+import StoredImage from '../components/StoredImage';
 
 type AnalysisDraft = {
   analysisText: string;
@@ -127,6 +129,7 @@ export default function JournalSessionDetail() {
     sessionQuality: null as number | null, finalReflection: '',
   });
   const [analysisDrafts, setAnalysisDrafts] = useState<Record<string, AnalysisDraft>>({});
+  const [editingTimelineAnalysisId, setEditingTimelineAnalysisId] = useState<string | null>(null);
   const [analysisFieldLabels, setAnalysisFieldLabels] = useState<JournalAnalysisFieldLabels>(
     JOURNAL_ANALYSIS_FIELD_LABELS,
   );
@@ -149,6 +152,8 @@ export default function JournalSessionDetail() {
   const [eventNotes, setEventNotes] = useState('');
   const [eventTime, setEventTime] = useState('');
   const [eventSaving, setEventSaving] = useState(false);
+  const [editingTimelineEventId, setEditingTimelineEventId] = useState<string | null>(null);
+  const [timelineEventDraft, setTimelineEventDraft] = useState({ typeOptionId: '', notes: '', eventTime: '' });
   const [file, setFile] = useState<File | null>(null);
   const [fileCaption, setFileCaption] = useState('');
   const [attachmentAnalysisId, setAttachmentAnalysisId] = useState('session');
@@ -224,6 +229,9 @@ export default function JournalSessionDetail() {
   const metrics = useMemo(() => bundle ? journalSessionService.calculateMetrics(bundle.trades) : null, [bundle]);
   const media = bundle?.media ?? [];
   const analyses = bundle?.analyses ?? [];
+  const timeframeAnalyses = analyses.filter(analysis => !(
+    analysis.timelineOnly ?? analysis.updatedAt > analysis.createdAt
+  ));
   const triggers = bundle?.triggers ?? [];
   const timelineItems = useMemo<JournalSessionTimelineItem[]>(() => bundle ? [
     ...bundle.analyses.map(record => ({ id: record.id, kind: 'analysis' as const, timestamp: record.createdAt, record })),
@@ -284,6 +292,7 @@ export default function JournalSessionDetail() {
     try {
       await journalSessionService.updateAnalysisEvent(analysisId, {
         sessionId, timeframeOptionId: existing.timeframeOptionId,
+        timelineOnly: true,
         analysisText: draft.analysisText,
         marketContext: draft.marketContext,
         momentumText: draft.momentumText,
@@ -303,6 +312,7 @@ export default function JournalSessionDetail() {
         previousTradeId: draft.previousTradeId === 'none' ? null : draft.previousTradeId,
         nextTradeId: draft.nextTradeId === 'none' ? null : draft.nextTradeId,
       });
+      if (editingTimelineAnalysisId === analysisId) setEditingTimelineAnalysisId(null);
       toast.success('رویداد تحلیل ذخیره شد.');
       await reloadSilent();
     } catch (cause) { toast.error(cause instanceof Error ? cause.message : 'ذخیرهٔ تحلیل انجام نشد.'); }
@@ -312,6 +322,7 @@ export default function JournalSessionDetail() {
     if (!window.confirm('این رویداد تحلیل حذف شود؟ پیوست‌های آن در سشن باقی می‌مانند.')) return;
     try {
       await journalSessionService.deleteAnalysisEvent(analysisId);
+      if (editingTimelineAnalysisId === analysisId) setEditingTimelineAnalysisId(null);
       await reloadSilent();
       toast.success('رویداد تحلیل حذف شد.');
     } catch (cause) { toast.error(cause instanceof Error ? cause.message : 'حذف رویداد تحلیل انجام نشد.'); }
@@ -417,9 +428,42 @@ export default function JournalSessionDetail() {
   };
   const removeEvent = async (eventId: string) => {
     setBusyEventId(eventId);
-    try { await journalSessionService.deleteEvent(eventId); await reloadSilent(); toast.success('رویداد حذف شد.'); }
+    try {
+      await journalSessionService.deleteEvent(eventId);
+      if (editingTimelineEventId === eventId) setEditingTimelineEventId(null);
+      await reloadSilent();
+      toast.success('رویداد حذف شد.');
+    }
     catch (cause) { toast.error(cause instanceof Error ? cause.message : 'حذف رویداد انجام نشد.'); }
     finally { setBusyEventId(''); }
+  };
+  const beginTimelineEventEdit = (event: JournalSessionEvent) => {
+    const date = new Date(event.eventAt);
+    date.setMinutes(date.getMinutes() - date.getTimezoneOffset());
+    setTimelineEventDraft({
+      typeOptionId: event.typeOptionId,
+      notes: event.notes,
+      eventTime: date.toISOString().slice(0, 16),
+    });
+    setEditingTimelineEventId(event.id);
+  };
+  const saveTimelineEventEdit = async () => {
+    if (!editingTimelineEventId || !timelineEventDraft.typeOptionId || !timelineEventDraft.eventTime) return;
+    setEventSaving(true);
+    try {
+      await journalSessionService.updateEvent(editingTimelineEventId, {
+        typeOptionId: timelineEventDraft.typeOptionId,
+        notes: timelineEventDraft.notes,
+        eventAt: new Date(timelineEventDraft.eventTime).getTime(),
+      });
+      setEditingTimelineEventId(null);
+      await reloadSilent();
+      toast.success('رویداد خط زمانی به‌روزرسانی شد.');
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : 'ویرایش رویداد انجام نشد.');
+    } finally {
+      setEventSaving(false);
+    }
   };
   const addMedia = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -495,6 +539,97 @@ export default function JournalSessionDetail() {
   const scrollToTrigger = () => document.getElementById('journal-trigger-capture')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   const optionLabel = (optionId: string | null | undefined, fallback: string) =>
     bundleOptions.find(option => option.id === optionId)?.label ?? fallback;
+  const editingTimelineAnalysis = analyses.find(analysis => analysis.id === editingTimelineAnalysisId) ?? null;
+  const renderTimelineAnalysisEditor = (analysis: JournalSessionAnalysis) => {
+    const draft = analysisDrafts[analysis.id] ?? toDraft(analysis);
+    const selectField = (label: string, category: string, value: string, onChange: (next: string) => void, testId: string) => (
+      <div className="space-y-1.5">
+        <Label className="text-xs">{label}</Label>
+        <Select value={value} onValueChange={onChange}>
+          <SelectTrigger data-testid={testId}><SelectValue placeholder="ثبت نشده" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">ثبت نشده</SelectItem>
+            {safeOptions(bundleOptions, category).map(option => <SelectItem key={option.id} value={option.id}>{option.label}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </div>
+    );
+    const renderFlexible = (key: AnalysisFlexibleFieldKey) => {
+      if (hiddenFields.has(key)) return null;
+      const layout = fieldLayouts[key];
+      return <AnalysisFlexibleField
+        key={key}
+        label={analysisFieldLabels[key]}
+        layout={layout}
+        textValue={draft[key]}
+        selectedIds={draft.fieldSelections[key] ?? []}
+        options={safeOptions(bundleOptions, layout.optionCategory)}
+        onTextChange={value => updateAnalysisDraft(analysis.id, { [key]: value })}
+        onSelectedChange={ids => updateAnalysisDraft(analysis.id, { fieldSelections: { ...draft.fieldSelections, [key]: ids } })}
+        onRowsChange={rows => changeFieldRows(key, rows)}
+        testId={`${key}-${analysis.id}-timeline-edit`}
+      />;
+    };
+    return <div className="space-y-4" data-testid={`form-edit-timeline-analysis-${analysis.id}`}>
+      {renderFlexible('analysisText')}
+      {renderFlexible('marketContext')}
+      {renderFlexible('momentumText')}
+      {renderFlexible('pricePositionText')}
+      {!hiddenFields.has('expectedDirectionOptionId') && selectField(
+        analysisFieldLabels.expectedDirectionOptionId, 'direction', draft.expectedDirectionOptionId,
+        value => updateAnalysisDraft(analysis.id, { expectedDirectionOptionId: value }), `select-edit-expected-direction-${analysis.id}`,
+      )}
+      {renderFlexible('directionLogicText')}
+      {renderFlexible('scenario')}
+      {renderFlexible('triggerContext')}
+      {renderFlexible('zones')}
+      {!hiddenFields.has('notes') && (
+        <div className="space-y-1.5">
+          <Label className="text-xs">{analysisFieldLabels.notes}</Label>
+          <Textarea rows={3} className="resize-y" value={draft.notes} onChange={event => updateAnalysisDraft(analysis.id, { notes: event.target.value })} />
+        </div>
+      )}
+      <div className="space-y-2 rounded-lg border border-border/80 bg-muted/10 p-3">
+        <p className="text-xs font-medium text-muted-foreground">نتیجهٔ سناریو</p>
+        <div className="grid gap-3 sm:grid-cols-[minmax(0,14rem)_1fr]">
+          <Select value={draft.scenarioOutcomeOptionId} onValueChange={value => updateAnalysisDraft(analysis.id, { scenarioOutcomeOptionId: value })}>
+            <SelectTrigger><SelectValue placeholder="ثبت نشده" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">ثبت نشده</SelectItem>
+              {safeOptions(bundleOptions, 'scenario_outcome').map(option => <SelectItem key={option.id} value={option.id}>{option.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Textarea rows={2} placeholder="چرا سناریو همین‌طور پیش رفت؟ (اختیاری)" value={draft.scenarioOutcomeNote} onChange={event => updateAnalysisDraft(analysis.id, { scenarioOutcomeNote: event.target.value })} />
+        </div>
+      </div>
+      <JournalMediaStrip session={bundle!.session} analysisId={analysis.id} media={media} onChanged={reloadSilent} testIdPrefix={`timeline-edit-analysis-${analysis.id}`} />
+      <div className="grid gap-3 sm:grid-cols-2">
+        {(['previousTradeId', 'nextTradeId'] as const).filter(field => !hiddenFields.has(field)).map(field => (
+          <div key={field} className="space-y-1.5">
+            <Label className="text-xs">{analysisFieldLabels[field]}</Label>
+            <Select value={draft[field]} onValueChange={value => updateAnalysisDraft(analysis.id, { [field]: value })}>
+              <SelectTrigger><SelectValue placeholder="بدون پیوند" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">بدون پیوند</SelectItem>
+                {bundle!.trades.map(trade => <SelectItem key={trade.id} value={trade.id}>{trade.symbol} · {localDate(trade.openedAt)}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+        ))}
+      </div>
+      {!hiddenFields.has('tags') && (
+        <div className="space-y-1.5">
+          <Label className="text-xs">{analysisFieldLabels.tags}</Label>
+          <Input placeholder="ساختار تمیز، نیازمند تأیید" value={draft.tags} onChange={event => updateAnalysisDraft(analysis.id, { tags: event.target.value })} />
+        </div>
+      )}
+      <div className="flex flex-wrap justify-end gap-2 border-t pt-3">
+        <Button type="button" variant="ghost" onClick={() => setEditingTimelineAnalysisId(null)}>بستن</Button>
+        <Button type="button" variant="outline" onClick={() => void deleteAnalysis(analysis.id)} className="gap-2 text-destructive"><Trash2 className="h-4 w-4" />حذف</Button>
+        <Button type="button" onClick={() => void saveAnalysis(analysis.id)} disabled={saving} className="gap-2"><Save className="h-4 w-4" />ذخیره رویداد</Button>
+      </div>
+    </div>;
+  };
 
   return <main dir="rtl" className="tradermind-page-shell mx-auto min-w-0 w-full max-w-6xl space-y-5 p-4 pb-14 [overflow-wrap:anywhere] md:p-8" data-testid="page-journal-session-detail">
     <div className="flex flex-wrap items-center justify-between gap-3">
@@ -582,9 +717,13 @@ export default function JournalSessionDetail() {
             const analysisSummary = item.kind === 'analysis'
               ? buildJournalAnalysisSummary(item.record, analysisFieldLabels, bundleOptions, bundle.trades)
               : null;
-            const analysisMedia = item.kind === 'analysis'
+            const timelineMedia = item.kind === 'analysis'
               ? media.filter(mediaItem => mediaItem.analysisId === item.id)
-              : [];
+              : item.kind === 'trigger'
+                ? media.filter(mediaItem => mediaItem.triggerId === item.id)
+                : item.kind === 'trade'
+                  ? media.filter(mediaItem => mediaItem.tradeId === item.id)
+                  : [];
             const details = item.kind === 'trigger' ? item.record.marketMovement || item.record.notes
                 : item.kind === 'event' ? item.record.notes : '';
             return <div key={`${item.kind}-${item.id}`} className="flex items-start gap-3 px-4 py-3" data-testid={`timeline-item-${item.kind}-${item.id}`}>
@@ -593,6 +732,8 @@ export default function JournalSessionDetail() {
                 <div className="flex flex-wrap items-center gap-2"><Badge variant="outline" className="text-[10px]">{kindLabel}</Badge>
                   {item.kind === 'trade' ? <Link href={`/journal/trades/${item.record.id}?returnTo=${encodeURIComponent(`/journal/sessions/${sessionId}`)}`} className="text-sm font-medium text-primary hover:underline" data-testid={`timeline-trade-link-${item.id}`}>{summary}</Link> : <span className="text-sm font-medium">{summary}</span>}
                   <span className="text-[10px] text-muted-foreground">{localDate(item.timestamp)}</span>
+                  {item.kind === 'analysis' && <Button type="button" size="icon" variant="ghost" className="h-7 w-7" aria-label="ویرایش رویداد تحلیل" onClick={() => setEditingTimelineAnalysisId(item.id)} data-testid={`button-edit-timeline-analysis-${item.id}`}><Pencil className="h-3.5 w-3.5" /></Button>}
+                  {item.kind === 'event' && <Button type="button" size="icon" variant="ghost" className="h-7 w-7" aria-label="ویرایش رویداد" onClick={() => beginTimelineEventEdit(item.record)} data-testid={`button-edit-timeline-event-${item.id}`}><Pencil className="h-3.5 w-3.5" /></Button>}
                 </div>
                 {item.kind === 'analysis' && analysisSummary && (
                   <div className="mt-2 space-y-2" data-testid={`timeline-analysis-summary-${item.id}`}>
@@ -606,19 +747,23 @@ export default function JournalSessionDetail() {
                       <span className="text-[10px] text-muted-foreground">{analysisFieldLabels.tags}:</span>
                       {analysisSummary.tags.map(tag => <Badge key={tag} variant="secondary" className="text-[10px]">{tag}</Badge>)}
                     </div>}
-                    {analysisMedia.length > 0 && <div className="flex flex-wrap items-center gap-1.5" data-testid={`timeline-analysis-media-${item.id}`}>
-                      <span className="text-[10px] text-muted-foreground">پیوست‌های تحلیل:</span>
-                      {analysisMedia.map(mediaItem => <button
+                  </div>
+                )}
+                {details && <p className="mt-1 break-words whitespace-pre-wrap text-xs leading-5 text-muted-foreground">{details}</p>}
+                {timelineMedia.length > 0 && <div className="mt-2 flex flex-wrap items-start gap-2" data-testid={`timeline-analysis-media-${item.id}`}>
+                  {timelineMedia.map(mediaItem => mediaItem.mimeType.startsWith('image/')
+                    ? <div key={mediaItem.id} className="w-32 overflow-hidden rounded-md border border-border/70 bg-muted/20 sm:w-40" data-testid={`timeline-screenshot-${mediaItem.id}`}>
+                        <StoredImage source={mediaItem.blob} enableViewer showDownload filename={mediaItem.fileName} alt={mediaItem.caption || mediaItem.fileName} className="aspect-video w-full object-cover" />
+                        {mediaItem.caption && <p className="truncate px-2 py-1 text-[10px] text-muted-foreground">{mediaItem.caption}</p>}
+                      </div>
+                    : <button
                         key={mediaItem.id}
                         type="button"
                         onClick={() => openMedia(mediaItem)}
                         className="max-w-full truncate rounded-full border border-border/70 px-2 py-1 text-[10px] text-primary hover:bg-primary/5"
                         data-testid={`button-open-timeline-media-${mediaItem.id}`}
                       >{mediaItem.caption || mediaItem.fileName}</button>)}
-                    </div>}
-                  </div>
-                )}
-                {details && <p className="mt-1 break-words whitespace-pre-wrap text-xs leading-5 text-muted-foreground">{details}</p>}
+                </div>}
               </div>
             </div>;
           })}
@@ -627,7 +772,7 @@ export default function JournalSessionDetail() {
     </section>
 
     <section className="space-y-3" aria-labelledby="analysis-heading">
-      <div className="flex flex-wrap items-end justify-between gap-3"><div className="min-w-0"><p className="text-[10px] font-medium tracking-[0.18em] text-primary">MARKET CONTEXT</p><h2 id="analysis-heading" className="mt-1 text-xl font-semibold">رویدادهای تحلیل چندبازه‌ای</h2></div><span className="max-w-full text-xs text-muted-foreground">{analyses.length} رویداد تحلیل</span></div>
+      <div className="flex flex-wrap items-end justify-between gap-3"><div className="min-w-0"><p className="text-[10px] font-medium tracking-[0.18em] text-primary">MARKET CONTEXT</p><h2 id="analysis-heading" className="mt-1 text-xl font-semibold">رویدادهای تحلیل چندبازه‌ای</h2></div><span className="max-w-full text-xs text-muted-foreground">{timeframeAnalyses.length} رویداد تحلیل</span></div>
       {timeframes.length === 0 ? <Card className="border-dashed"><CardContent className="p-5 text-sm text-muted-foreground" data-testid="empty-enabled-timeframes">تایم‌فریم فعالی برای تحلیل وجود ندارد. گزینه‌های غیرفعال عمداً قابل انتخاب نیستند.</CardContent></Card> : (
         <Card className="tradermind-card">
           <CardContent className="space-y-3 p-4">
@@ -647,9 +792,9 @@ export default function JournalSessionDetail() {
           </CardContent>
         </Card>
       )}
-      {analyses.length === 0 ? <Card className="border-dashed"><CardContent className="p-5 text-center text-sm text-muted-foreground" data-testid="empty-analysis-events">هنوز رویدادی ثبت نشده است.</CardContent></Card> : (
+      {timeframeAnalyses.length === 0 ? <Card className="border-dashed"><CardContent className="p-5 text-center text-sm text-muted-foreground" data-testid="empty-analysis-events">هنوز رویدادی ثبت نشده است.</CardContent></Card> : (
         <div className="grid gap-4">
-          {analyses.map((analysis, index) => {
+          {timeframeAnalyses.map((analysis, index) => {
             const draft = analysisDrafts[analysis.id] ?? toDraft(analysis);
             const selectField = (label: string, category: string, value: string, setValue: (next: string) => void, testId: string) => {
               const options = safeOptions(bundleOptions, category);
@@ -941,6 +1086,35 @@ export default function JournalSessionDetail() {
         })}</div>
       </Card>}
     </section>
+    <Dialog open={!!editingTimelineAnalysis} onOpenChange={open => { if (!open) setEditingTimelineAnalysisId(null); }}>
+      <DialogContent className="max-w-4xl">
+        <DialogHeader><DialogTitle>ویرایش رویداد تحلیل مستقل</DialogTitle></DialogHeader>
+        {editingTimelineAnalysis && renderTimelineAnalysisEditor(editingTimelineAnalysis)}
+      </DialogContent>
+    </Dialog>
+    <Dialog open={!!editingTimelineEventId} onOpenChange={open => { if (!open) setEditingTimelineEventId(null); }}>
+      <DialogContent>
+        <DialogHeader><DialogTitle>ویرایش رویداد مستقل سشن</DialogTitle></DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label className="text-xs">نوع رویداد</Label>
+            <Select value={timelineEventDraft.typeOptionId} onValueChange={typeOptionId => setTimelineEventDraft(current => ({ ...current, typeOptionId }))}>
+              <SelectTrigger data-testid="select-edit-timeline-event-type"><SelectValue placeholder="انتخاب نوع" /></SelectTrigger>
+              <SelectContent>{eventTypes.map(option => <SelectItem key={option.id} value={option.id}>{option.label}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">زمان</Label>
+            <Input type="datetime-local" value={timelineEventDraft.eventTime} onChange={event => setTimelineEventDraft(current => ({ ...current, eventTime: event.target.value }))} data-testid="input-edit-timeline-event-time" />
+          </div>
+          <Textarea rows={4} placeholder="شرح رویداد" value={timelineEventDraft.notes} onChange={event => setTimelineEventDraft(current => ({ ...current, notes: event.target.value }))} data-testid="input-edit-timeline-event-notes" />
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={() => setEditingTimelineEventId(null)}>انصراف</Button>
+            <Button type="button" onClick={() => void saveTimelineEventEdit()} disabled={eventSaving || !timelineEventDraft.typeOptionId || !timelineEventDraft.eventTime} data-testid="button-save-timeline-event">ذخیره</Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
     <div className="flex items-center gap-2 border-t border-border/60 pt-4 text-[11px] text-muted-foreground"><ShieldCheck className="h-3.5 w-3.5 text-primary" />سوابق سشن و پیوست‌ها روی همین دستگاه نگهداری می‌شوند.</div>
   </main>;
 }

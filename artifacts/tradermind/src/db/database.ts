@@ -1001,6 +1001,8 @@ export interface JournalSessionAnalysis {
   id: string;
   sessionId: string;
   timeframeOptionId: string;
+  /** تحلیل ذخیره‌شده از فرم چندبازه‌ای به رویداد مستقل خط زمانی منتقل شده است. */
+  timelineOnly?: boolean;
   analysisText?: string;
   marketContext?: string;
   directionOptionId: string | null;

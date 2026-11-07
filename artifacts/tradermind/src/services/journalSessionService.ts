@@ -746,6 +746,7 @@ export const journalSessionService = {
       id: existing?.id ?? uid(),
       createdAt,
       updatedAt: now,
+      timelineOnly: input.timelineOnly ?? existing?.timelineOnly ?? false,
       analysisText: input.analysisText ?? '',
       marketContext: input.marketContext ?? '',
       scenario: input.scenario ?? '',
@@ -1060,6 +1061,16 @@ export const journalSessionService = {
     const event: JournalSessionEvent = { ...input, id: uid(), createdAt: now, updatedAt: now };
     await db.journalSessionEvents.add(event);
     return event;
+  },
+
+  async updateEvent(id: string, patch: Pick<JournalSessionEvent, 'typeOptionId' | 'notes' | 'eventAt'>): Promise<void> {
+    const existing = await db.journalSessionEvents.get(id);
+    if (!existing) throw new Error('رویداد پیدا نشد.');
+    const option = await db.journalOptions.get(patch.typeOptionId);
+    if (!option || option.category !== 'session_event_type' || !option.enabled) {
+      throw new Error('نوع رویداد معتبر انتخاب نشده است.');
+    }
+    await db.journalSessionEvents.update(id, { ...patch, updatedAt: Date.now() });
   },
 
   async deleteEvent(id: string): Promise<void> {

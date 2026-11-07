@@ -259,6 +259,7 @@ describe('journalSessionService', () => {
     const first = await journalSessionService.saveAnalysis({
       sessionId: session.id,
       timeframeOptionId: timeframe!.id,
+      timelineOnly: true,
       directionOptionId: null,
       marketStructureOptionId: null,
       liquidityContextOptionIds: '[]',
@@ -279,6 +280,8 @@ describe('journalSessionService', () => {
       tags: '[]',
     });
     expect(second.id).not.toBe(first.id);
+    expect(first.timelineOnly).toBe(true);
+    expect(second.timelineOnly).toBe(false);
     expect(await db.journalSessionAnalyses.count()).toBe(2);
 
     const event = await journalSessionService.addEvent({
@@ -288,6 +291,17 @@ describe('journalSessionService', () => {
       eventAt: session.startTime,
     });
     expect((await journalSessionService.getBundle(session.id))?.events).toContainEqual(event);
+    await journalSessionService.updateEvent(event.id, {
+      typeOptionId: eventType!.id,
+      notes: 'Edited independent event',
+      eventAt: session.startTime + 60_000,
+    });
+    expect((await journalSessionService.getBundle(session.id))?.events).toContainEqual({
+      ...event,
+      notes: 'Edited independent event',
+      eventAt: session.startTime + 60_000,
+      updatedAt: expect.any(Number),
+    });
     await journalSessionService.deleteEvent(event.id);
     expect(await db.journalSessionEvents.count()).toBe(0);
   });

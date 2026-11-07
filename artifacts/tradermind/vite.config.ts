@@ -14,6 +14,9 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
+const isDevServer =
+  process.env.NODE_ENV !== 'production' && process.env.TRADERMIND_NATIVE !== '1';
+
 const basePath =
   process.env.TRADERMIND_NATIVE === '1'
     ? './'
@@ -30,6 +33,8 @@ export default defineConfig({
       // avoids mixing a new index.html with old lazy chunks on mobile/PWA.
       registerType: 'prompt',
       injectRegister: 'auto',
+      selfDestroying: isDevServer,
+      devOptions: { enabled: false },
       manifest: false, // از public/manifest.json استفاده می‌شود
       workbox: {
         cleanupOutdatedCaches: true,
